@@ -86,11 +86,17 @@ def trend_table(df: pd.DataFrame, assignments, names: dict[int, str],
     return out.sort_values(["growth", "total"], ascending=False).reset_index(drop=True)
 
 
-def alerts(trends: pd.DataFrame, burst_threshold: float = 2.0) -> list[str]:
-    msgs = []
+def alerts(trends: pd.DataFrame, burst_threshold: float = 2.0, min_recent: int = 5,
+           max_alerts: int = 3) -> list[str]:
+    """Only strong signals: emerging topics with >= min_recent new articles or clear
+    bursts; at most `max_alerts`, strongest first (avoids alert fatigue)."""
+    if trends.empty:
+        return []
+    cand = []
     for _, r in trends.iterrows():
-        if r["status"].startswith("🆕"):
-            msgs.append(f"Emerging topic: {r['name']} - {r['recent']} new articles in the recent window")
-        elif r["burst_z"] >= burst_threshold and r["recent"] >= 3:
-            msgs.append(f"Burst detected: {r['name']} (z = {r['burst_z']})")
-    return msgs
+        if r["status"].startswith("🆕") and r["recent"] >= min_recent:
+            cand.append((r["recent"] * 2, f"Emerging topic: {r['name']} - {r['recent']} new articles "
+                                           f"in the recent window"))
+        elif r["burst_z"] >= burst_threshold and r["recent"] >= min_recent:
+            cand.append((r["recent"], f"Burst detected: {r['name']} (z = {r['burst_z']})"))
+    return [m for _, m in sorted(cand, key=lambda x: -x[0])[:max_alerts]]

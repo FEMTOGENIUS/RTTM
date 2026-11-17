@@ -1,4 +1,7 @@
+import os
 import sys
+
+os.environ.setdefault("RTTM_NO_DOWNLOAD", "1")
 from pathlib import Path
 
 import pytest

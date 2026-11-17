@@ -1,7 +1,7 @@
 """Full paper stack (gensim LDA, BERTopic + all-MiniLM-L6-v2 + UMAP + HDBSCAN).
 
 These tests are SKIPPED automatically when the heavy libraries are not
-installed. After `pip install -r requirements.txt` run:
+installed. After `pip install -r requirements-full.txt` run:
 
     pytest tests/test_full_stack.py -v
 

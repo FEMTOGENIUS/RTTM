@@ -61,7 +61,7 @@ def check() -> None:
     print("  NewsAPI keys  :", len(config.NEWSAPI_KEYS), "| GNews keys:", len(config.GNEWS_KEYS))
     full = HAS_GENSIM and "installed" in backend_summary()["bertopic"]
     print("\n=> " + ("FULL paper stack active." if full else
-                     "Running with lite fall-backs (everything works; install requirements.txt for the full stack)."))
+                     "Running with lite fall-backs (everything works; pip install -r requirements-full.txt for the full stack)."))
 
 
 if __name__ == "__main__":

@@ -50,6 +50,9 @@ RSS_FEEDS: dict[str, str] = {
     "Indian Express": "https://indianexpress.com/feed/",
     "The Guardian World": "https://www.theguardian.com/world/rss",
     "NPR": "https://feeds.npr.org/1001/rss.xml",
+    "The Hindu": "https://www.thehindu.com/news/national/feeder/default.rss",
+    "Times of India": "https://timesofindia.indiatimes.com/rssfeedstopstories.cms",
+    "Hindustan Times": "https://www.hindustantimes.com/feeds/rss/india-news/rssfeed.xml",
 }
 
 # Fetch / scheduler settings
@@ -57,7 +60,8 @@ FETCH_INTERVAL_MIN = float(os.getenv("RTTM_FETCH_INTERVAL_MIN", "10"))
 HTTP_TIMEOUT = float(os.getenv("RTTM_HTTP_TIMEOUT", "15"))
 USER_AGENT = os.getenv(
     "RTTM_USER_AGENT",
-    "Mozilla/5.0 (RTTM research prototype; +https://github.com/) Python-requests",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/130.0 Safari/537.36",
 )
 STORE_MAX_AGE_DAYS = int(os.getenv("RTTM_STORE_MAX_AGE_DAYS", "14"))
 STORE_MAX_ITEMS = int(os.getenv("RTTM_STORE_MAX_ITEMS", "20000"))

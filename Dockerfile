@@ -3,8 +3,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
-COPY requirements-core.txt requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements-full.txt ./
+RUN pip install --no-cache-dir -r requirements-full.txt
 COPY . .
 RUN python scripts/setup_nlp.py --no-check
 EXPOSE 8501

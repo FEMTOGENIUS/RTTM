@@ -50,15 +50,6 @@ NEWS_STOPWORDS = {
 }
 KEEP_SHORT = {"ai", "uk", "eu", "un", "ev"}
 
-_NLTK_STOP: set[str] = set()
-try:  # optional NLTK stop-word list
-    from nltk.corpus import stopwords as _sw  # type: ignore
-
-    _NLTK_STOP = set(_sw.words("english"))
-except Exception:
-    pass
-
-STOPWORDS: frozenset[str] = frozenset(set(ENGLISH_STOP_WORDS) | _NLTK_STOP | NEWS_STOPWORDS)
 
 
 # --------------------------------------------------------------------------- lemmatiser
@@ -71,6 +62,41 @@ def _spacy_nlp():
     except Exception as exc:
         log.info("spaCy unavailable (%s) - trying NLTK", exc)
         return None
+
+
+def _ensure_nltk_data() -> None:
+    """Download NLTK stop-words / WordNet once if NLTK is installed but its data is
+    missing (e.g. on Streamlit Cloud). Disable with RTTM_NO_DOWNLOAD=1."""
+    import os
+
+    if os.getenv("RTTM_NO_DOWNLOAD"):
+        return
+    try:
+        import nltk  # type: ignore
+    except Exception:
+        return
+    for res, pkg in (("corpora/stopwords", "stopwords"), ("corpora/wordnet", "wordnet"),
+                     ("corpora/omw-1.4", "omw-1.4")):
+        try:
+            nltk.data.find(res)
+        except LookupError:
+            try:
+                nltk.download(pkg, quiet=True)
+            except Exception:
+                pass
+
+
+_ensure_nltk_data()
+
+_NLTK_STOP: set[str] = set()
+try:  # optional NLTK stop-word list
+    from nltk.corpus import stopwords as _sw  # type: ignore
+
+    _NLTK_STOP = set(_sw.words("english"))
+except Exception:
+    pass
+
+STOPWORDS: frozenset[str] = frozenset(set(ENGLISH_STOP_WORDS) | _NLTK_STOP | NEWS_STOPWORDS)
 
 
 @lru_cache(maxsize=1)
@@ -106,7 +132,9 @@ def rule_lemma(w: str) -> str:
         return w[:-3] + "y"
     if w.endswith(("sses", "shes", "ches", "xes", "zes")):
         return w[:-2]
-    if w.endswith("s") and not w.endswith(_NO_STRIP):
+    if w.endswith("eas"):                      # areas, ideas, seas
+        return w[:-1]
+    if w.endswith("s") and not w.endswith(_NO_STRIP + ("as",)):  # keeps thomas, texas, gas
         return w[:-1]
     return w
 

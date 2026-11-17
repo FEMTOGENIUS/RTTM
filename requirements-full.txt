@@ -1,0 +1,8 @@
+# Full stack used in the paper / report  (Python 3.10 - 3.12 recommended)
+-r requirements.txt
+gensim>=4.3                  # LDA + CoherenceModel
+bertopic>=0.16               # BERTopic
+sentence-transformers>=2.6   # all-MiniLM-L6-v2 embeddings (pulls in torch)
+umap-learn>=0.5.5
+hdbscan>=0.8.33
+spacy>=3.7                   # + python -m spacy download en_core_web_sm

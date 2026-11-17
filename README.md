@@ -29,14 +29,15 @@ run.bat
 ```bash
 ./run.sh
 ```
-Both scripts create a virtual environment, install `requirements.txt`, download the NLP models
+Both scripts create a virtual environment, install `requirements-full.txt` (falling back to the light
+`requirements.txt`), download the NLP models
 (`scripts/setup_nlp.py`) and start the dashboard at **http://localhost:8501**.
 
 ### Manual
 ```bash
 python -m venv .venv && .venv\Scripts\activate        # Linux/macOS: source .venv/bin/activate
-pip install -r requirements.txt                        # full paper stack
-#   (if that fails, e.g. no C++ build tools for hdbscan:  pip install -r requirements-core.txt)
+pip install -r requirements-full.txt                   # full paper stack
+#   (if that fails, e.g. no C++ build tools for hdbscan:  pip install -r requirements.txt  = light version)
 python scripts/setup_nlp.py                            # NLTK data, spaCy model, MiniLM model + health report
 copy .env.example .env                                 # optional: add NEWSAPI_KEY / GNEWS_KEY
 streamlit run main.py                                  # (streamlit run project.py also works)
@@ -75,9 +76,9 @@ in the dashboard (**System** tab) - it never crashes because of a missing packag
 
 | Tab | Content |
 |---|---|
-| 📊 Overview | word-frequency bar chart, topic-distribution pie, articles per topic, sources, **live feed** of latest clustered articles |
-| 🧩 Topics | one card per topic: label, keyword weights, **word cloud**, trend badge, drill-down list of articles; keyword **topic search** |
-| 📈 Trends | **topic evolution over time** (count / share / stacked), momentum chart, table of 🆕 emerging · 📈 trending · ➖ stable · 📉 fading topics with burst z-scores |
+| 📊 Overview | clickable **news-landscape treemap** (category → topic), topic donut, hot-keywords chart, **live feed** cards, sources |
+| 🧩 Topics | grid of colour-coded topic cards with trend badges, **topic explorer** (click a topic pill → keywords, **word cloud**, article cards), keyword **topic search** |
+| 📈 Trends | **topic evolution over time** (count / share / stacked), animated **topic race** (▶ Play), momentum chart, table of 🆕 emerging · 📈 trending · ➖ stable · 📉 fading topics with burst z-scores |
 | 🗺️ Topic Map | **intertopic distance map** (Jensen-Shannon / cosine + MDS, like pyLDAvis) and **document cluster map**; embedded **pyLDAvis** for gensim LDA if installed |
 | ⚖️ Compare Models | C_V / NPMI / UMass coherence, topic diversity, outliers, runtime, human-evaluation results, LDA↔BERTopic agreement (ARI, NMI) and topic-alignment heat-map |
 | 📄 Articles & Export | filter by source / topic / keyword / date range; **download CSV / JSON** (articles + topics) and topics + metrics JSON |
@@ -130,7 +131,23 @@ percentages in **Compare Models**.
 
 ---
 
-## 5. REST API (optional)
+## 5. Running from GitHub
+
+Push this folder to a GitHub repository (`git init && git add . && git commit -m "init" && git push`), then:
+
+| Option | What it gives you | How |
+|---|---|---|
+| **GitHub Codespaces** | the full stack running in your browser (cloud VM) | repo page → **Code → Codespaces → Create codespace**. `.devcontainer/` installs everything and starts the dashboard (first start ≈ 10 min) |
+| **GitHub Actions** | automatic tests on every push | already configured in `.github/workflows/tests.yml` → see the **Actions** tab |
+| **Streamlit Community Cloud** | free public URL (`<name>.streamlit.app`) | share.streamlit.io → **Create app** → pick the repo, main file `main.py`, Python 3.11. Add keys under **Settings → Secrets**: `NEWSAPI_KEY = "..."` |
+
+`requirements.txt` is the light version on purpose: Streamlit Community Cloud has a small memory limit that
+torch + MiniLM do not fit, so the cloud app runs in lite mode (all features work, lighter NLP back-ends;
+NLTK data is downloaded automatically). Codespaces / your PC use `requirements-full.txt`. The article store there is temporary (reset on reboot) and the
+background scheduler does not run; use the dashboard's auto-refresh instead. GitHub Pages **cannot** run it
+(Pages only serves static files).
+
+## 6. REST API (optional)
 
 ```bash
 pip install fastapi uvicorn
@@ -140,7 +157,7 @@ uvicorn api:app --port 8000          # docs: http://localhost:8000/docs
 
 ---
 
-## 6. Tests
+## 7. Tests
 
 ```bash
 pip install pytest
@@ -154,7 +171,7 @@ references valid data columns.
 
 ---
 
-## 7. Project structure
+## 8. Project structure
 
 ```
 ├── main.py / project.py      Streamlit entry points
@@ -182,17 +199,18 @@ references valid data columns.
 ├── evaluate.py               reproducible LDA vs BERTopic evaluation + stress test
 ├── scripts/                  setup_nlp.py (models + health check), make_sample_data.py
 ├── tests/                    pytest suite + fixtures
+├── .github/workflows/      CI tests;  .devcontainer/  GitHub Codespaces
 ├── Dockerfile, docker-compose.yml, Procfile, run.bat, run.sh
-└── requirements*.txt         core / full / optional
+└── requirements*.txt         light (default, Streamlit Cloud) / full (paper stack) / optional
 ```
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | Problem | Fix |
 |---|---|
-| `pip install -r requirements.txt` fails on `hdbscan` / `gensim` | use Python 3.11; on Windows install "Microsoft C++ Build Tools", or `pip install -r requirements-core.txt` (lite back-ends) |
+| `pip install -r requirements-full.txt` fails on `hdbscan` / `gensim` | use Python 3.11; on Windows install "Microsoft C++ Build Tools", or `pip install -r requirements.txt` (light back-ends) |
 | First BERTopic run is slow | the MiniLM model (~90 MB) and torch load once; later refreshes reuse cached embeddings |
 | "BERTopic failed … falling back to LDA" | fewer than 10 articles or everything was an outlier - widen the time window / fetch more |
-| A feed shows ⚠️ in the header | that site blocked or timed out; other sources keep working |
+| "⚠️ source(s) unavailable" (HTTP 429 / 403) | the news site rate-limited (429) or blocked (403) this server. Cloud machines (Codespaces, Streamlit Cloud) share IPs and are limited more often; the other sources keep working, try again in a few minutes |
 | NewsAPI returns nothing recent | free plan = 24 h delay; use Google News RSS |
 | Dark mode only partly applied | some Streamlit versions ignore runtime theme changes; use ☰ → Settings → Theme |

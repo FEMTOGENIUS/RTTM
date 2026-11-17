@@ -14,7 +14,7 @@ import pandas as pd
 import streamlit as st
 
 import config
-from dashboard import charts
+from dashboard import charts, theme
 from data.fetchers import fetch_all, load_records, load_sample
 from data.store import ArticleStore
 from models import engine
@@ -75,7 +75,7 @@ def _toggle(label: str, value: bool, key: str, help: str | None = None) -> bool:
 
 # --------------------------------------------------------------------------- theme
 def apply_theme(dark: bool) -> None:
-    """Light / dark mode toggle (Streamlit theme + matching CSS + plotly template)."""
+    """Light / dark mode (Streamlit theme + modern CSS + plotly template)."""
     want = "dark" if dark else "light"
     try:
         from streamlit import config as st_config
@@ -84,30 +84,15 @@ def apply_theme(dark: bool) -> None:
             st_config.set_option("theme.base", want)
     except Exception:
         pass
-    if dark:
-        css = """
-        .stApp {background-color:#0e1117; color:#fafafa;}
-        [data-testid="stSidebar"] {background-color:#161a23;}
-        .stApp h1,.stApp h2,.stApp h3,.stApp h4,.stApp p,.stApp label,.stApp span,.stApp li {color:#fafafa;}
-        """
-    else:
-        css = """
-        .stApp {background: linear-gradient(180deg,#f7fbff 0%,#ffffff 30%);}
-        [data-testid="stSidebar"] {background-color:#eef5fb;}
-        """
-    css += """
-    .topic-chip {display:inline-block;padding:2px 10px;margin:2px;border-radius:12px;
-                 background:#cfe8ff;color:#023047;font-size:0.82rem;}
-    div[data-testid="stMetricValue"] {font-size:1.6rem;}
-    """
-    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+    st.markdown(f"<style>{theme.css(dark)}</style>", unsafe_allow_html=True)
 
 
 # --------------------------------------------------------------------------- sidebar
 def sidebar() -> dict:
     s: dict = {}
     sb = st.sidebar
-    sb.title("⚙️ Controls")
+    sb.title("⚙️ Control panel")
+    sb.caption("Pick a source, a model and explore.")
     s["dark"] = _toggle_sidebar("🌙 Dark mode", False, "dark")
     s["mode"] = sb.radio("Data mode", ["Live (real-time)", "Static (sample dataset)", "Static (upload file)"],
                          key="mode", help="Live mode fetches news from APIs/RSS and keeps a rolling store. "
@@ -154,8 +139,8 @@ def sidebar() -> dict:
     s["show_articles"] = sb.checkbox("📄 Show articles in topics", value=True, key="showarts")
     sb.markdown("---")
     c1, c2 = sb.columns(2)
-    s["fetch_now"] = c1.button("📥 Fetch now", disabled=not s["mode"].startswith("Live"))
-    s["rerun_models"] = c2.button("♻️ Re-run models")
+    s["fetch_now"] = c1.button("📥 Fetch now", disabled=not s["mode"].startswith("Live"), type="primary")
+    s["rerun_models"] = c2.button("♻️ Re-run")
     return s
 
 
@@ -250,30 +235,40 @@ def run_models(rows: list[dict], s: dict) -> engine.PipelineOutput:
 
 # --------------------------------------------------------------------------- views
 def header(out: engine.PipelineOutput, s: dict, n_rows: int) -> None:
-    st.title("📰 Real-Time News Topic Modeling")
-    st.caption("Live clustering of streaming news into coherent topics with **BERTopic** "
-               "(transformer embeddings + UMAP + HDBSCAN + c-TF-IDF) and **LDA**.")
+    live = s["mode"].startswith("Live")
     lf = st.session_state.get("last_fetch")
-    c = st.columns(5)
-    c[0].metric("Articles analysed", len(out.df), help=f"{n_rows} loaded before preprocessing")
-    c[1].metric("Sources", out.df["source"].nunique() if not out.df.empty else 0)
     main_model = s["models"][0] if s["models"][0] in out.results else next(iter(out.results), "-")
-    c[2].metric("Topics", len(out.results[main_model].topic_ids) if main_model in out.results else 0,
-                help=f"model shown: {main_model}")
-    c[3].metric("Pipeline time", f"{out.timings.get('total', 0):.1f}s")
-    if lf and s["mode"].startswith("Live"):
-        c[4].metric("New this fetch", lf["new"],
-                    help=f"last fetch {lf['time'].astimezone().strftime('%H:%M:%S')} · {lf['seconds']:.1f}s")
-    else:
-        c[4].metric("Mode", "Static")
+    n_topics = len(out.results[main_model].topic_ids) if main_model in out.results else 0
+    updated = lf["time"].astimezone().strftime("%H:%M:%S") if (lf and live) else "sample data"
+    tags = [f"Model: {' + '.join(m for m in s['models'])}", f"Updated {updated}"]
+    if s["query"]:
+        tags.append(f"Query: {s['query']}")
+    st.markdown(theme.hero("Real-Time News Topic Modeling",
+                           "Streaming news clustered into coherent topics with <b>BERTopic</b> "
+                           "(transformer embeddings · UMAP · HDBSCAN · c-TF-IDF) and <b>LDA</b>.",
+                           tags, live), unsafe_allow_html=True)
+    cov = out.metrics.get(main_model, {}).get("coherence_cv")
+    items = [("📰", "Articles analysed", str(len(out.df)), f"{n_rows} loaded"),
+             ("🏷️", "Sources", str(out.df["source"].nunique() if not out.df.empty else 0), "publishers"),
+             ("🧩", "Topics", str(n_topics), main_model),
+             ("⚡", "Pipeline time", f"{out.timings.get('total', 0):.1f}s", "fetch → model → metrics"),
+             (("🆕", "New this fetch", str(lf["new"]), f"{lf['seconds']:.1f}s fetch") if (lf and live) else
+              ("🎯", "Coherence C_V", f"{cov:.2f}" if cov == cov and cov is not None else "-", "higher is better"))]
+    st.markdown(theme.kpis(items), unsafe_allow_html=True)
     for w in out.warnings:
         st.warning(w)
-    if lf and s["mode"].startswith("Live"):
-        for e in lf["errors"]:
-            st.caption(f"⚠️ {e}")
-    for model in out.results:
-        for a in out.alerts.get(model, []):
-            st.warning(f"🚨 [{model}] {a}")
+    if lf and live and lf["errors"]:
+        ok = sum(1 for v in lf["per_source"].values() if v)
+        with st.expander(f"⚠️ {len(lf['errors'])} source(s) unavailable right now - {ok} source(s) working "
+                         "fine (click for details)"):
+            for e in lf["errors"]:
+                st.caption(f"• {e}")
+            st.caption("Rate limits (429) and blocks (403) come from the news sites, not from this app. "
+                       "Cloud servers (Codespaces / Streamlit Cloud) share IP addresses and get limited more "
+                       "often - the remaining sources keep the dashboard working.")
+    msgs = [f"[{m}] {a}" for m in out.results for a in out.alerts.get(m, [])][:3]
+    if msgs:
+        st.markdown("".join(theme.alert(m) for m in msgs), unsafe_allow_html=True)
 
 
 def _pick_model(out: engine.PipelineOutput, s: dict, key: str) -> str | None:
@@ -290,25 +285,40 @@ def tab_overview(out, s, dark):
     if not model:
         return
     names = out.names(model)
+    docs = out.doc_frame(model)
     c1, c2 = st.columns([3, 2])
+    with c1:
+        plot(charts.category_treemap(docs, dark), key="treemap")
+    with c2:
+        plot(charts.topic_pie(out.results[model].sizes(), names, dark), key="pie")
+    c1, c2 = st.columns([2, 3])
     with c1:
         plot(charts.word_freq_bar(out.word_freq, dark), key="wf")
     with c2:
-        plot(charts.topic_pie(out.results[model].sizes(), names, dark), key="pie")
-    c1, c2 = st.columns(2)
-    with c1:
-        plot(charts.topic_size_bar(out.results[model].sizes(), names, dark), key="sizes")
-    with c2:
-        plot(charts.sources_bar(out.df, dark), key="sources")
-    st.subheader("🛰️ Live feed - latest clustered articles")
-    lab = out.labels[model]
-    feed = out.doc_frame(model).sort_values("published_at", ascending=False).head(15)
-    for _, r in feed.iterrows():
-        L = lab.get(int(r["topic"]), {"icon": "📰", "name": "Outlier"})
-        when = r["published_at"].tz_convert(None).strftime("%d %b %H:%M")
-        link = f"[{r['title']}]({r['url']})" if r.get("url") else r["title"]
-        st.markdown(f"{L['icon']} **{L['name']}** · {link}  \n<small>{r['source']} · {when} UTC</small>",
-                    unsafe_allow_html=True)
+        st.markdown("#### 🛰️ Live feed")
+        lab = out.labels[model]
+        feed = docs.sort_values("published_at", ascending=False).head(12)
+        cards = []
+        for _, r in feed.iterrows():
+            L = lab.get(int(r["topic"]), {"icon": "📰", "category": "Outlier"})
+            cards.append(theme.article_card(r["title"], r.get("url", ""), r["source"], r["published_at"],
+                                            f"{L['icon']} {L['category']}", int(r["topic"])))
+        st.markdown("".join(cards), unsafe_allow_html=True)
+    plot(charts.sources_bar(out.df, dark), key="sources")
+
+
+def _choose(label: str, options: list, key: str, format_func=str):
+    """Pills (Streamlit >= 1.40) with a selectbox fallback."""
+    fn = getattr(st, "pills", None)
+    val = None
+    if callable(fn):
+        try:
+            val = fn(label, options, format_func=format_func, key=key, default=options[0])
+        except TypeError:
+            val = None
+    else:
+        val = st.selectbox(label, options, format_func=format_func, key=key)
+    return val if val in options else options[0]
 
 
 def tab_topics(out, s, dark):
@@ -322,38 +332,52 @@ def tab_topics(out, s, dark):
     st.caption(f"{len(ids)} of {len(res.topic_ids)} topics · backend: {res.backend}")
     for n in res.notes:
         st.caption(f"ℹ️ {n}")
+    if not ids:
+        st.info("No topic matches this keyword.")
+        return
     sizes = res.sizes()
     total = max(len(out.df), 1)
-    trends = out.trends.get(model, pd.DataFrame()).set_index("topic") if model in out.trends else pd.DataFrame()
-    docs = out.doc_frame(model)
-    for t in ids:
-        L = lab[t]
-        status = trends.loc[t, "status"] if t in trends.index else ""
-        with st.container(border=True):
-            st.subheader(f"{L['icon']} {L['name']}  ·  {sizes.get(t, 0)} articles "
-                         f"({100 * sizes.get(t, 0) / total:.1f}%)  {status}")
-            words = res.topic_words[t]
-            st.markdown(" ".join(f"<span class='topic-chip'>{w} ({sc:.3f})</span>" for w, sc in words[:10]),
-                        unsafe_allow_html=True)
-            c1, c2 = st.columns(2)
-            with c1:
-                plot(charts.keywords_bar(words, dark), key=f"kw_{model}_{t}")
-            with c2:
-                img = charts.wordcloud_image(words, dark)
-                if img is not None:
-                    st.image(img, **_image_stretch())
-                else:
-                    plot(charts.wordcloud_plotly(words, dark), key=f"wc_{model}_{t}")
-            if s["show_articles"]:
-                with st.expander(f"Show articles for this topic ({sizes.get(t, 0)})"):
-                    sub = docs[docs["topic"] == t].sort_values("published_at", ascending=False)
-                    for _, r in sub.head(50).iterrows():
-                        when = r["published_at"].tz_convert(None).strftime("%d %b %H:%M") if pd.notna(r["published_at"]) else ""
-                        link = f"[{r['title']}]({r['url']})" if r.get("url") else r["title"]
-                        st.markdown(f"- {link}  \n  <small>{r['source']} · {when} · "
-                                    f"confidence {r['confidence']:.2f}</small>", unsafe_allow_html=True)
-                    if len(sub) > 50:
-                        st.caption(f"… and {len(sub) - 50} more (see the Articles tab)")
+    trends = out.trends[model].set_index("topic") if model in out.trends and not out.trends[model].empty \
+        else pd.DataFrame()
+    status = {t: (trends.loc[t, "status"] if t in trends.index else "") for t in ids}
+    # ---- overview grid of topic cards
+    for row in range(0, len(ids), 4):
+        cols = st.columns(4)
+        for col, t in zip(cols, ids[row:row + 4]):
+            with col:
+                st.markdown(theme.topic_card(t, lab[t], sizes.get(t, 0), 100 * sizes.get(t, 0) / total,
+                                             res.top_words(t, 6), status[t]), unsafe_allow_html=True)
+    st.markdown("&nbsp;")
+    # ---- explorer for one topic
+    t = _choose("Explore a topic", ids, key=f"pick_{model}",
+                format_func=lambda x: f"{lab[x]['icon']} T{x} · {lab[x]['keywords']}")
+    L = lab[t]
+    color = theme.topic_color(t)
+    words = res.topic_words[t]
+    st.markdown(f"<div class='card' style='border-left:6px solid {color}'><h3 style='margin:0'>{L['icon']} "
+                f"{theme.esc(L['name'])} {theme.status_badge(status[t])}</h3><div class='muted'>"
+                f"{sizes.get(t, 0)} articles · {100 * sizes.get(t, 0) / total:.1f}% of coverage · "
+                f"label confidence {L['confidence']:.0%}</div><div style='margin-top:8px'>"
+                + "".join(theme.chip(f"{w} {sc:.3f}", color) for w, sc in words[:10]) + "</div></div>",
+                unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        plot(charts.keywords_bar(words, dark, color=color), key=f"kw_{model}_{t}")
+    with c2:
+        img = charts.wordcloud_image(words, dark)
+        if img is not None:
+            st.image(img, **_image_stretch())
+        else:
+            plot(charts.wordcloud_plotly(words, dark), key=f"wc_{model}_{t}")
+    if s["show_articles"]:
+        docs = out.doc_frame(model)
+        sub = docs[docs["topic"] == t].sort_values("published_at", ascending=False)
+        st.markdown(f"#### 📄 Articles in this topic ({len(sub)})")
+        st.markdown("".join(theme.article_card(r["title"], r.get("url", ""), r["source"], r["published_at"],
+                                               f"{L['icon']} T{t}", t, f"· match {r['confidence']:.2f}")
+                            for _, r in sub.head(40).iterrows()), unsafe_allow_html=True)
+        if len(sub) > 40:
+            st.caption(f"… and {len(sub) - 40} more (see the Articles tab)")
 
 
 def tab_trends(out, s, dark):
@@ -369,6 +393,7 @@ def tab_trends(out, s, dark):
         value = c1.radio("Show", ["count", "share"], horizontal=True, key="tl_val")
         stacked = c2.checkbox("Stacked area", key="tl_stack")
         plot(charts.timeline(tot, value, dark, stacked), key="timeline")
+        plot(charts.topic_race(tot, dark), key="race")
     trends = out.trends.get(model)
     if trends is not None and not trends.empty:
         plot(charts.growth_bar(trends, dark), key="growth")
@@ -634,7 +659,8 @@ def main() -> None:
         rows = []
     auto_refresh(s, store)
     if not rows:
-        st.title("📰 Real-Time News Topic Modeling")
+        st.markdown(theme.hero("Real-Time News Topic Modeling", "Waiting for articles…", [],
+                               s["mode"].startswith("Live")), unsafe_allow_html=True)
         lf = st.session_state.get("last_fetch")
         if lf and s["mode"].startswith("Live"):
             for e in lf["errors"]:

@@ -116,8 +116,23 @@ def normalize_article(*, title: str, description: str = "", content: str = "",
 
 def _session() -> requests.Session:
     s = requests.Session()
-    s.headers.update({"User-Agent": config.USER_AGENT})
+    s.headers.update({"User-Agent": config.USER_AGENT,
+                      "Accept": "application/rss+xml, application/xml;q=0.9, */*;q=0.8",
+                      "Accept-Language": "en-IN,en;q=0.9"})
     return s
+
+
+def _get_with_retry(session, url: str, retries: int = 2, **kw):
+    """GET with a short back-off on 429 (rate limited) and 5xx responses."""
+    r = None
+    for attempt in range(retries + 1):
+        r = session.get(url, timeout=config.HTTP_TIMEOUT, **kw)
+        if r.status_code not in (429, 500, 502, 503, 504) or attempt == retries:
+            return r
+        wait = min(8.0, 1.5 * (attempt + 1))
+        log.info("HTTP %s from %s - retrying in %.1fs", r.status_code, url[:60], wait)
+        time.sleep(wait)
+    return r
 
 
 # --------------------------------------------------------------------------- NewsAPI
@@ -281,7 +296,11 @@ def fetch_rss(feeds: dict[str, str], *, query: str = "", limit_per_feed: int = 5
     terms = [t.lower() for t in re.findall(r"\w+", query or "")]
     for name, url in feeds.items():
         try:
-            r = session.get(url, timeout=config.HTTP_TIMEOUT)
+            r = _get_with_retry(session, url)
+            if r.status_code == 429:
+                raise FetchError("rate-limited by the site (HTTP 429) - try again in a few minutes")
+            if r.status_code == 403:
+                raise FetchError("the site blocks automated readers from this server (HTTP 403)")
             r.raise_for_status()
             if feedparser is not None:
                 parsed = feedparser.parse(r.content)

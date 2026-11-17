@@ -32,13 +32,20 @@ class FakeFig:
         return self
 
 
+class Const:
+    def __init__(self, v):
+        self.v = v
+
+
 def _px(kind):
     def fn(data_frame=None, *args, **kw):
         if isinstance(data_frame, pd.DataFrame):
-            for k in ("x", "y", "color", "size", "text", "hover_name", "names", "values"):
+            for k in ("x", "y", "color", "size", "text", "hover_name", "names", "values", "animation_frame"):
                 v = kw.get(k)
                 if isinstance(v, str):
                     assert v in data_frame.columns, f"px.{kind}: column {v!r} not in {list(data_frame.columns)}"
+            for v in kw.get("path") or []:
+                assert isinstance(v, Const) or v in data_frame.columns, f"px.{kind}: path column {v!r} missing"
             hd = kw.get("hover_data")
             for v in (hd.keys() if isinstance(hd, dict) else hd or []):
                 assert v in data_frame.columns, f"px.{kind}: hover column {v!r} missing"
@@ -54,7 +61,8 @@ def make_plotly() -> dict[str, types.ModuleType]:
     go = types.ModuleType("plotly.graph_objects")
     qual = types.SimpleNamespace(Pastel=["#a"] * 11, Set3=["#b"] * 12, Pastel2=["#c"] * 8, Dark24=["#d"] * 24)
     px.colors = types.SimpleNamespace(qualitative=qual)
-    for k in ("bar", "pie", "line", "area", "scatter", "imshow"):
+    px.Constant = Const
+    for k in ("bar", "pie", "line", "area", "scatter", "imshow", "treemap"):
         setattr(px, k, _px(k))
     go.Figure = lambda *a, **k: FakeFig("figure")
     go.Scatter = lambda **k: ("scatter", k)
