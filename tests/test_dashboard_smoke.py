@@ -124,7 +124,10 @@ def test_live_mode_fetches_once_then_uses_store(monkeypatch):
 
     def fake_fetch_all(sources, **kw):
         calls["n"] += 1
-        return fetchers.FetchReport(articles=fetchers.load_sample(),
+        arts = fetchers.load_sample()
+        for a in arts:
+            a["edition"] = "en-IN"
+        return fetchers.FetchReport(articles=arts,
                                     per_source={"Google News RSS": 370, "BBC World": 0},
                                     errors=["RSS 'BBC World' failed: rate-limited"], seconds=0.1)
 
@@ -156,3 +159,46 @@ def test_upload_csv(monkeypatch):
 def test_upload_missing_shows_info(monkeypatch):
     st, _ = run_app(monkeypatch, {"mode": "Static (upload file)"})
     assert st.errors == [] and "Upload a CSV/JSON" in st.texts()
+
+
+def _live_articles(edition="en-IN", section_map=None):
+    from data import fetchers
+
+    arts = fetchers.load_sample()
+    for a in arts:
+        a["edition"] = edition
+        a["section"] = (section_map or {}).get(a.get("gold_topic"), "")
+    return arts
+
+
+def test_live_section_pages_use_feed_sections(monkeypatch):
+    """Articles from dedicated section feeds must appear on that section page."""
+    from data import fetchers
+
+    smap = {"elections": "Law & Justice", "markets": "Energy"}   # pretend these came from Law / Energy feeds
+    monkeypatch.setattr(fetchers, "fetch_all", lambda sources, **kw: fetchers.FetchReport(
+        articles=_live_articles(section_map=smap), per_source={"Google News · Law": 40}, seconds=0.1))
+    for page in ("Law & Justice", "Energy"):
+        st, _ = run_app(monkeypatch, {"mode": "Live (real-time)", "window": "Last 7 days"}, {"page": page})
+        txt = st.texts()
+        assert st.errors == [] and "No " + page not in txt, page
+        assert f"All {html.escape(page)} headlines" in txt
+
+
+def test_region_and_language_switch_only_shows_that_edition(monkeypatch):
+    from data import fetchers
+    from data.store import ArticleStore
+
+    ArticleStore().add(_live_articles("fr-FR")[:40])          # leftovers from another edition
+    monkeypatch.setattr(fetchers, "fetch_all", lambda sources, **kw: fetchers.FetchReport(
+        articles=_live_articles("en-US"), per_source={"Google News": 300}, seconds=0.1))
+    st, app = run_app(monkeypatch, {"mode": "Live (real-time)", "window": "Last 7 days", "country": "United States"})
+    assert st.errors == []
+    assert "English · United States edition" in st.texts()
+    rows = app.load_articles({**_settings(app, st), "fetch_now": False}, ArticleStore())
+    assert rows and all(r["edition"] == "en-US" for r in rows)
+
+
+def _settings(app, st):
+    return {"mode": "Live (real-time)", "sources": ["google_news"], "query": "", "language": "en", "country": "US",
+            "publishers": None, "limit": 40, "window": 168, "fetch_now": False}

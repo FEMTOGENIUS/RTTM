@@ -68,6 +68,8 @@ STORE_MAX_ITEMS = int(os.getenv("RTTM_STORE_MAX_ITEMS", "20000"))
 
 # Modeling defaults
 EMBEDDING_MODEL = os.getenv("RTTM_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+# used automatically for Hindi / French / German / Spanish editions
+MULTILINGUAL_EMBEDDING_MODEL = os.getenv("RTTM_ML_EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
 SPACY_MODEL = os.getenv("RTTM_SPACY_MODEL", "en_core_web_sm")
 RANDOM_STATE = 42
 DEFAULT_N_TOPICS = 8

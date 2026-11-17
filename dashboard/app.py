@@ -16,6 +16,7 @@ import streamlit as st
 import config
 from dashboard import charts, news, theme
 from data.fetchers import fetch_all, load_records, load_sample
+from data import sources as SRC
 from data.store import ArticleStore
 from models import engine
 from models.bertopic_model import backend_summary
@@ -26,15 +27,9 @@ from utils.preprocess import backend_info
 
 log = get_logger("dashboard")
 
-SOURCE_OPTIONS = {
-    "google_news": "Google News RSS (no key)",
-    "rss": "RSS feeds: BBC, Al Jazeera, CNN, Indian Express, Guardian, NPR (no key)",
-    "newsapi": "NewsAPI.org (API key)",
-    "gnews": "GNews.io (API key)",
-}
-LANGS = {"English": "en", "Hindi": "hi", "French": "fr", "German": "de", "Spanish": "es"}
-COUNTRIES = {"India": "IN", "United States": "US", "United Kingdom": "GB", "Australia": "AU",
-             "Canada": "CA", "Singapore": "SG"}
+SOURCE_OPTIONS = {**SRC.GROUPS, "newsapi": "NewsAPI.org (API key)", "gnews": "GNews.io (API key)"}
+LANGS = SRC.LANGUAGES
+COUNTRIES = SRC.REGIONS
 WINDOWS = {"Last 6 hours": 6, "Last 12 hours": 12, "Last 24 hours": 24, "Last 48 hours": 48,
            "Last 3 days": 72, "Last 7 days": 168, "All stored": None}
 
@@ -90,7 +85,9 @@ def apply_theme(dark: bool) -> None:
 
 # --------------------------------------------------------------------------- sidebar
 MODE_LABELS = {"Live (real-time)": "Live", "Static (sample dataset)": "Sample", "Static (upload file)": "Upload"}
-SOURCE_SHORT = {"google_news": "Google News", "rss": "Publisher RSS", "newsapi": "NewsAPI", "gnews": "GNews"}
+SOURCE_SHORT = {"google_news": "Google News top", "google_sections": "Google News sections",
+                "publishers": "Edition publishers", "international": "International",
+                "newsapi": "NewsAPI", "gnews": "GNews"}
 
 
 def _segmented(container, label: str, options: list, key: str, default=None, format_func=str, help=None):
@@ -129,13 +126,26 @@ def settings_panel() -> dict:
     s["query"] = sb.text_input("Search query", value="", key="query", placeholder="e.g. india, election, AI",
                                help="Keywords sent to the news sources. Leave empty for top headlines.").strip()
     if s["mode"].startswith("Live"):
-        s["sources"] = sb.multiselect("Sources", list(SOURCE_OPTIONS), default=["google_news", "rss"],
-                                      format_func=SOURCE_SHORT.get, key="sources",
-                                      help="Google News and Publisher RSS need no API key.")
         c1, c2 = sb.columns(2)
         s["language"] = LANGS[c1.selectbox("Language", list(LANGS), key="lang")]
         s["country"] = COUNTRIES[c2.selectbox("Region", list(COUNTRIES), key="country")]
-        s["limit"] = sb.slider("Articles per source", 10, 100, 40, 5, key="limit")
+        s["sources"] = sb.multiselect("Sources", list(SOURCE_OPTIONS),
+                                      default=["google_news", "google_sections", "publishers"],
+                                      format_func=SOURCE_SHORT.get, key="sources",
+                                      help="Google News (top + every section) and publisher feeds need no API key. "
+                                           "International publishers are English only.")
+        pubs = [f["name"] for f in SRC.publisher_feeds(s["language"], s["country"])]
+        if s["language"] == "en" and "international" in s["sources"]:
+            pubs += [f["name"] for f in SRC.INTERNATIONAL_EN]
+        with sb.expander(f"Publishers ({len(pubs)})"):
+            chosen = st.multiselect("Publisher feeds", pubs, default=pubs, key=f"pubs_{s['language']}_{s['country']}",
+                                    label_visibility="collapsed")
+        s["publishers"] = chosen if len(chosen) < len(pubs) else None
+        n_feeds = len(SRC.build_feeds([g for g in s["sources"] if g != "google_news"], s["language"], s["country"],
+                                      "", s["publishers"])) + (1 if "google_news" in s["sources"] else 0)
+        sb.markdown(f"<div class='edition'><b>Edition:</b> {theme.esc(SRC.edition_label(s['language'], s['country']))}"
+                    f" · {n_feeds} feeds</div>", unsafe_allow_html=True)
+        s["limit"] = sb.slider("Articles per feed", 10, 100, 40, 5, key="limit")
         s["auto_refresh"] = sb.toggle("Stream new articles", value=False, key="auto",
                                       help="Re-fetch automatically and update topics when new articles arrive.") \
             if hasattr(sb, "toggle") else sb.checkbox("Stream new articles", False, key="auto")
@@ -148,7 +158,7 @@ def settings_panel() -> dict:
             s["full_text"] = st.checkbox("Download full article text (slower)", key="ft")
     else:
         s.update(sources=[], language="en", country="IN", limit=0, newsapi_key="", gnews_key="",
-                 full_text=False, auto_refresh=False, interval=300)
+                 full_text=False, auto_refresh=False, interval=300, publishers=None)
         if s["mode"].endswith("upload file)"):
             s["upload"] = sb.file_uploader("CSV or JSON file", type=["csv", "json"], key="upload",
                                            help="Columns: title, description/content, date, source, url")
@@ -186,7 +196,7 @@ def settings_panel() -> dict:
     s["rerun_models"] = c2.button("Re-run models", **_btn_stretch())
     full = HAS_GENSIM and "installed" in backend_summary()["bertopic"]
     sb.markdown(f"<div class='sb-foot'><span class='dot {'ok' if full else 'lite'}'></span>"
-                f"{'Full NLP stack' if full else 'Lite NLP back-ends'} · NEWS23 (MT27) v3.3</div>", unsafe_allow_html=True)
+                f"{'Full NLP stack' if full else 'Lite NLP back-ends'} · NEWS23 (MT27) v3.4</div>", unsafe_allow_html=True)
     return s
 
 
@@ -202,7 +212,7 @@ def do_fetch(s: dict, store: ArticleStore) -> dict:
     gk = [k.strip() for k in s.get("gnews_key", "").split(",") if k.strip()] or None
     rep = fetch_all(s["sources"], query=s["query"], language=s["language"], limit=s["limit"],
                     hours=s["window"] or 72, newsapi_keys=nk, gnews_keys=gk, country=s["country"],
-                    full_text=s.get("full_text", False))
+                    full_text=s.get("full_text", False), publishers=s.get("publishers"))
     for a in rep.articles:
         a["query"] = s["query"]
     new = store.add(rep.articles)
@@ -211,8 +221,13 @@ def do_fetch(s: dict, store: ArticleStore) -> dict:
             "errors": rep.errors, "per_source": rep.per_source, "seconds": rep.seconds}
     st.session_state["last_fetch"] = info
     st.session_state["last_fetch_ts"] = time.time()
-    st.session_state["fetched_for"] = (tuple(s["sources"]), s["query"], s["language"], s["country"])
+    st.session_state["fetched_for"] = _fetch_key(s)
     return info
+
+
+def _fetch_key(s: dict) -> tuple:
+    return (tuple(s["sources"]), s["query"], s["language"], s["country"], tuple(s.get("publishers") or ()),
+            s.get("limit"))
 
 
 def _matches_query(a: dict, query: str) -> bool:
@@ -233,14 +248,19 @@ def _in_window(rows: list[dict], hours: float | None) -> list[dict]:
 
 def load_articles(s: dict, store: ArticleStore) -> list[dict]:
     if s["mode"].startswith("Live"):
-        key = (tuple(s["sources"]), s["query"], s["language"], s["country"])
+        key = _fetch_key(s)
         if not s["sources"]:
-            st.warning("Select at least one news source in the sidebar.")
+            st.warning("Select at least one news source in the left panel.")
             return []
-        if s["fetch_now"] or st.session_state.get("fetched_for") != key:
-            with st.spinner("Fetching live news…"):
+        prev = st.session_state.get("fetched_for")
+        if s["fetch_now"] or prev != key:
+            if prev and prev != key and hasattr(st, "toast"):
+                st.toast(f"Settings changed - loading {SRC.edition_label(s['language'], s['country'])} news…")
+            with st.spinner(f"Fetching {SRC.edition_label(s['language'], s['country'])} news from all feeds…"):
                 do_fetch(s, store)
-        rows = [r for r in store.load(hours=s["window"]) if _matches_query(r, s["query"])]
+        edition = SRC.edition_key(s["language"], s["country"])
+        rows = [r for r in store.load(hours=s["window"])        # only this edition (language + region)
+                if r.get("edition") == edition and _matches_query(r, s["query"])]
         return rows
     if s["mode"].startswith("Static (sample"):
         rows = load_sample()
@@ -271,7 +291,8 @@ def run_models(rows: list[dict], s: dict) -> engine.PipelineOutput:
                   bertopic_nr_topics="auto" if s["bt_auto"] else s["n_topics"],
                   min_topic_size=int(s["min_topic_size"]) or None, lda_passes=s["lda_passes"],
                   lda_weighting=s["lda_weighting"], embedding_model=s["embedding_model"],
-                  reduce_outliers=s["reduce_outliers"], english_only=s["english_only"])
+                  reduce_outliers=s["reduce_outliers"], english_only=s["english_only"],
+                  language=s.get("language", "en") if s["mode"].startswith("Live") else "en")
     key = hashlib.sha1((json.dumps(sorted(r["id"] for r in rows)) + json.dumps(params, default=str))
                        .encode()).hexdigest()
     if st.session_state.get("pipeline_key") != key or s["rerun_models"] or "output" not in st.session_state:
@@ -774,7 +795,9 @@ def main() -> None:
     lf = st.session_state.get("last_fetch")
     updated = lf["time"].astimezone(theme.ZoneInfo(theme.REGION_TZ.get(s["country"], "UTC"))).strftime("%H:%M") \
         if (lf and live) else "now"
-    st.markdown(theme.utility_bar(s["country"], live, updated), unsafe_allow_html=True)
+    st.markdown(theme.utility_bar(s["country"], live, updated,
+                                  SRC.edition_label(s["language"], s["country"]) if live else ""),
+                unsafe_allow_html=True)
     st.markdown(theme.masthead(), unsafe_allow_html=True)
     news.render_nav()
     if not rows:

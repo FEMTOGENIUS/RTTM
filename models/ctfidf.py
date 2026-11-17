@@ -18,8 +18,7 @@ from sklearn.preprocessing import normalize
 def make_vectorizer(n_docs: int = 0, ngram_range=(1, 2)) -> CountVectorizer:
     # NOTE: c-TF-IDF fits the vectorizer on ONE joined document per topic, so
     # min_df must be 1 - otherwise every topic-specific word is discarded.
-    return CountVectorizer(ngram_range=ngram_range, min_df=1,
-                           token_pattern=r"(?u)\b[a-z][a-z]+\b")
+    return CountVectorizer(ngram_range=ngram_range, min_df=1, token_pattern=r"(?u)\S\S+", lowercase=False)
 
 
 def class_tfidf(docs: list[str], labels: np.ndarray, vectorizer: CountVectorizer | None = None,
@@ -31,7 +30,7 @@ def class_tfidf(docs: list[str], labels: np.ndarray, vectorizer: CountVectorizer
     try:
         X = vectorizer.fit_transform(joined)
     except ValueError:  # vocabulary empty with min_df=2 -> relax
-        vectorizer = CountVectorizer(ngram_range=(1, 1), token_pattern=r"(?u)\b[a-z][a-z]+\b")
+        vectorizer = CountVectorizer(ngram_range=(1, 1), token_pattern=r"(?u)\S\S+", lowercase=False)
         X = vectorizer.fit_transform(joined)
     X = sparse.csr_matrix(X, dtype=np.float64)
     tf = normalize(X, norm="l1", axis=1)

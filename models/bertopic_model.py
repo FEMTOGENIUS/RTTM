@@ -97,11 +97,11 @@ def lsa_embeddings(clean_docs: list[str], dims: int = 100) -> np.ndarray:
 
     n = len(clean_docs)
     vec = TfidfVectorizer(ngram_range=(1, 2), min_df=2 if n >= 40 else 1, max_df=0.9,
-                          sublinear_tf=True)
+                          sublinear_tf=True, token_pattern=r"(?u)\S\S+", lowercase=False)
     try:
         X = vec.fit_transform(clean_docs)
     except ValueError:
-        X = TfidfVectorizer().fit_transform(clean_docs)
+        X = TfidfVectorizer(token_pattern=r"(?u)\S\S+").fit_transform(clean_docs)
     k = max(2, min(dims, X.shape[1] - 1, n - 1))
     Z = TruncatedSVD(n_components=k, random_state=config.RANDOM_STATE).fit_transform(X)
     return normalize(Z)

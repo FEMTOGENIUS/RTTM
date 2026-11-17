@@ -271,30 +271,39 @@ def _txt(el: ET.Element | None) -> str:
     return "" if el is None else ("".join(el.itertext()) or "").strip()
 
 
+def _local(tag) -> str:
+    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
+
+
+def _kid(el: ET.Element, *names: str) -> ET.Element | None:
+    for name in names:
+        for c in el:
+            if _local(c.tag) == name:
+                return c
+    return None
+
+
 def parse_feed_xml(xml_text: str | bytes, source_name: str = "RSS") -> list[dict]:
-    """Dependency-free RSS 2.0 / Atom parser (used when feedparser is absent)."""
+    """Dependency-free parser for RSS 2.0, RSS 1.0 (RDF) and Atom (used when feedparser is absent)."""
     if isinstance(xml_text, str):
         xml_text = xml_text.encode("utf-8")
     root = ET.fromstring(xml_text)
     items: list[dict] = []
-    channel_title = _txt(root.find("channel/title")) or _txt(root.find(f"{_ATOM}title"))
-    for it in root.iter("item"):
-        src_el = it.find("source")
-        content = ""
-        for tag in _MEDIA_NS:
-            content = _txt(it.find(tag)) or content
-        items.append(dict(title=_txt(it.find("title")), description=_txt(it.find("description")),
-                          content=content, url=_txt(it.find("link")),
-                          published_at=_txt(it.find("pubDate")) or _txt(it.find("{http://purl.org/dc/elements/1.1/}date")),
-                          source=_txt(src_el) or source_name or channel_title, image=_xml_image(it)))
-    for it in root.iter(f"{_ATOM}entry"):
-        link_el = it.find(f"{_ATOM}link")
-        items.append(dict(title=_txt(it.find(f"{_ATOM}title")),
-                          description=_txt(it.find(f"{_ATOM}summary")),
-                          content=_txt(it.find(f"{_ATOM}content")),
-                          url=link_el.get("href", "") if link_el is not None else "",
-                          published_at=_txt(it.find(f"{_ATOM}published")) or _txt(it.find(f"{_ATOM}updated")),
-                          source=source_name or channel_title, image=_xml_image(it)))
+    for it in root.iter():
+        kind = _local(it.tag)
+        if kind == "item":
+            src_el = _kid(it, "source")
+            items.append(dict(title=_txt(_kid(it, "title")), description=_txt(_kid(it, "description")),
+                              content=_txt(_kid(it, "encoded")), url=_txt(_kid(it, "link")),
+                              published_at=_txt(_kid(it, "pubDate")) or _txt(_kid(it, "date")),
+                              source=_txt(src_el) or source_name, image=_xml_image(it)))
+        elif kind == "entry":
+            link_el = _kid(it, "link")
+            items.append(dict(title=_txt(_kid(it, "title")), description=_txt(_kid(it, "summary")),
+                              content=_txt(_kid(it, "content")),
+                              url=link_el.get("href", "") if link_el is not None else "",
+                              published_at=_txt(_kid(it, "published")) or _txt(_kid(it, "updated")),
+                              source=source_name, image=_xml_image(it)))
     return items
 
 
@@ -366,12 +375,29 @@ def fetch_rss(feeds: dict[str, str], *, query: str = "", limit_per_feed: int = 5
 
 
 def google_news_rss_url(query: str = "", language: str = "en", country: str = "IN") -> str:
-    hl = f"{language}-{country}" if language == "en" else language
-    ceid = f"{country}:{language}"
+    from data.sources import google_edition
+
+    hl, gl, ceid = google_edition(language, country)
+    tail = f"hl={hl}&gl={gl}&ceid={ceid}"
     if query:
-        return (f"https://news.google.com/rss/search?q={quote_plus(query)}+when:2d"
-                f"&hl={hl}&gl={country}&ceid={ceid}")
-    return f"https://news.google.com/rss?hl={hl}&gl={country}&ceid={ceid}"
+        return f"https://news.google.com/rss/search?q={quote_plus(query)}+when:2d&{tail}"
+    return f"https://news.google.com/rss?{tail}"
+
+
+def google_post(arts: list[dict]) -> list[dict]:
+    """Google News titles look like "Headline - Publisher"; descriptions hold related headlines."""
+    for a in arts:
+        if " - " in a["title"]:
+            head, pub = a["title"].rsplit(" - ", 1)
+            if len(pub) < 60:
+                a["title"], a["source"] = head.strip(), pub.strip()
+                a["id"] = article_id(a["title"], a["url"])
+        t_norm = normalize_title(a["title"])
+        related = [h for h in a["description"].split(". ")
+                   if h and not normalize_title(h).startswith(t_norm[:40])]
+        a["description"] = ". ".join(related)
+        a["origin"] = "google_news"
+    return arts
 
 
 def fetch_google_news(query: str = "", *, language: str = "en", country: str = "IN",
@@ -380,19 +406,41 @@ def fetch_google_news(query: str = "", *, language: str = "en", country: str = "
     arts, errs = fetch_rss({"Google News": url}, limit_per_feed=limit, session=session)
     if errs and not arts:
         raise FetchError(errs[0])
-    for a in arts:  # Google titles look like "Headline - Publisher"
-        if " - " in a["title"]:
-            head, pub = a["title"].rsplit(" - ", 1)
-            if len(pub) < 60:
-                a["title"], a["source"] = head.strip(), pub.strip()
-                a["id"] = article_id(a["title"], a["url"])
-        # drop the related-headline that merely repeats the title; keep the others
-        t_norm = normalize_title(a["title"])
-        related = [h for h in a["description"].split(". ")
-                   if h and not normalize_title(h).startswith(t_norm[:40])]
-        a["description"] = ". ".join(related)
-        a["origin"] = "google_news"
-    return arts
+    return google_post(arts)
+
+
+def fetch_feeds(specs: list[dict], *, query: str = "", limit_per_feed: int = 40,
+                max_workers: int = 12) -> tuple[list[dict], list[str], dict[str, int]]:
+    """Fetch many feeds in parallel. Each article keeps its feed name and section hint.
+    Google feeds run with low concurrency (Google rate-limits bursts)."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    google_gate = threading.Semaphore(2)
+
+    def one(spec):
+        session = _session()
+        flt = "" if spec.get("kind") == "google" else query
+        if spec.get("kind") == "google":
+            with google_gate:
+                arts, errs = fetch_rss({spec["name"]: spec["url"]}, query=flt, limit_per_feed=limit_per_feed,
+                                       session=session)
+            arts = google_post(arts)
+        else:
+            arts, errs = fetch_rss({spec["name"]: spec["url"]}, query=flt, limit_per_feed=limit_per_feed,
+                                   session=session)
+        for a in arts:
+            a["feed"] = spec["name"]
+            a["section"] = spec.get("section") or ""
+        return spec["name"], arts, errs
+
+    out, errors, counts = [], [], {}
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        for name, arts, errs in ex.map(one, specs):
+            counts[name] = len(arts)
+            out.extend(arts)
+            errors.extend(errs)
+    return out, errors, counts
 
 
 # --------------------------------------------------------------------------- full text
@@ -475,58 +523,72 @@ class FetchReport:
     seconds: float = 0.0
 
 
-def fetch_all(sources: list[str], *, query: str = "", language: str = "en",
-              limit: int = 50, hours: int | None = 48, rss_feeds: dict[str, str] | None = None,
+def fetch_all(sources: list[str], *, query: str = "", language: str = "en", limit: int = 40,
+              hours: int | None = 48, rss_feeds: dict[str, str] | None = None,
               newsapi_keys: list[str] | None = None, gnews_keys: list[str] | None = None,
-              country: str = "IN", full_text: bool = False) -> FetchReport:
-    """Fetch from every selected source. Never raises; errors are collected."""
+              country: str = "IN", full_text: bool = False,
+              publishers: list[str] | None = None) -> FetchReport:
+    """Fetch from every selected source group. Never raises; errors are collected.
+
+    groups: google_news, google_sections, publishers, international, newsapi, gnews, sample
+    ("rss" = publishers + international, kept for backwards compatibility)
+    """
+    from data.sources import build_feeds, edition_key
+
     t0 = time.perf_counter()
     rep = FetchReport()
     from_date = datetime.now(timezone.utc) - timedelta(hours=hours) if hours else None
     session = _session()
+    groups = set(sources)
+    if "rss" in groups:
+        groups |= {"publishers", "international"}
     jobs: dict[str, Callable[[], list[dict]]] = {}
-    if "google_news" in sources:
-        jobs["Google News RSS"] = lambda: fetch_google_news(query, language=language, country=country,
-                                                            limit=limit, session=session)
-    if "rss" in sources:
-        def _rss():
-            feeds = rss_feeds or config.RSS_FEEDS
-            arts, errs = fetch_rss(feeds, query=query, limit_per_feed=max(5, limit // 2), session=session)
+    if "google_news" in groups:
+        jobs["Google News"] = lambda: fetch_google_news(query, language=language, country=country,
+                                                        limit=max(limit, 60), session=session)
+    if rss_feeds:
+        def _custom():
+            arts, errs = fetch_rss(rss_feeds, query=query, limit_per_feed=limit, session=session)
             rep.errors.extend(errs)
-            for name in feeds:   # per-feed status (so the UI can say "9 of 13 sources working")
-                rep.per_source[name] = sum(1 for a in arts if a.get("feed") == name)
             return arts
-        jobs["RSS feeds"] = _rss
-    if "newsapi" in sources:
+        jobs["Custom RSS"] = _custom
+    if "newsapi" in groups:
         jobs["NewsAPI"] = lambda: fetch_newsapi(query, language=language, page_size=limit,
                                                 from_date=from_date, keys=newsapi_keys, session=session)
-    if "gnews" in sources:
+    if "gnews" in groups:
         jobs["GNews"] = lambda: fetch_gnews(query, language=language, max_results=limit,
                                             from_date=from_date, keys=gnews_keys, session=session)
-    if "sample" in sources:
+    if "sample" in groups:
         jobs["Sample dataset"] = load_sample
     for name, job in jobs.items():
         try:
             arts = job()
-            if name != "RSS feeds":
-                rep.per_source[name] = len(arts)
+            rep.per_source[name] = len(arts)
             rep.articles.extend(arts)
         except Exception as exc:
-            if name != "RSS feeds":
-                rep.per_source[name] = 0
+            rep.per_source[name] = 0
             rep.errors.append(f"{name}: {exc}")
             log.error("%s failed: %s", name, exc)
-    # de-duplicate within the batch
-    seen: set[str] = set()
-    uniq = []
+    specs = build_feeds(sorted(groups - {"google_news"}), language, country, query, publishers)
+    if specs:
+        arts, errs, counts = fetch_feeds(specs, query=query, limit_per_feed=limit)
+        rep.articles.extend(arts)
+        rep.errors.extend(errs)
+        rep.per_source.update(counts)
+    # de-duplicate within the batch (keep the copy that carries a section hint)
+    best: dict[str, dict] = {}
     for a in rep.articles:
-        if a["id"] in seen:
-            continue
-        seen.add(a["id"])
-        uniq.append(a)
-    rep.articles = uniq
+        cur = best.get(a["id"])
+        if cur is None or (not cur.get("section") and a.get("section")):
+            best[a["id"]] = a
+    ed = edition_key(language, country)
+    for a in best.values():
+        a["edition"] = ed
+        a.setdefault("section", "")
+    rep.articles = list(best.values())
     if full_text and rep.articles:
         extract_full_text(rep.articles)
     rep.seconds = time.perf_counter() - t0
-    log.info("fetch_all: %d unique articles from %s in %.2fs", len(uniq), list(jobs), rep.seconds)
+    log.info("fetch_all: %d unique articles from %d feeds in %.2fs", len(rep.articles), len(rep.per_source),
+             rep.seconds)
     return rep

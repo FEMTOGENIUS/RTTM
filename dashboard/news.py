@@ -192,7 +192,8 @@ def build_clusters(out, model: str) -> list[dict]:
         recent = int(tr.loc[t, "recent"]) if t in getattr(tr, "index", []) else 0
         score = len(d) + 1.5 * recent + (8 if str(status).endswith("Emerging") else 0) \
             + (4 if str(status).endswith("Trending") else 0)
-        clusters.append(dict(tid=int(t), label=lab[t], category=lab[t]["category"], size=len(d),
+        hints = d["section"].fillna("").tolist() if "section" in d else []
+        clusters.append(dict(tid=int(t), label=lab[t], category=lab[t]["category"], size=len(d), hints=hints,
                              n_sources=int(d["source"].nunique()), lead=lead, related=related, status=status,
                              recent=recent, score=score, keywords=res.top_words(t, 8), docs=d))
     return sorted(clusters, key=lambda c: -c["score"])
@@ -201,6 +202,30 @@ def build_clusters(out, model: str) -> list[dict]:
 def ticker_items(clusters: list[dict]) -> list[tuple[str, str]]:
     hot = [c for c in clusters if str(c["status"]).endswith(("Emerging", "Trending"))] or clusters
     return [(theme.short_cat(c["category"]).upper(), theme._trim(c["lead"]["title"], 95)) for c in hot[:8]]
+
+
+def in_section(c: dict, cats: list[str]) -> bool:
+    if c["category"] in cats:
+        return True
+    hints = [h for h in c.get("hints", []) if h]
+    return bool(hints) and sum(h in cats for h in hints) / max(len(c.get("hints", [])), 1) >= 0.3
+
+
+def headlines_block(docs: pd.DataFrame, title: str, region: str, key: str, step: int = 50) -> None:
+    """Scrollable list of individual headlines with a "Show more" button."""
+    if docs.empty:
+        return
+    n = st.session_state.get(f"more_{key}", step)
+    rows = docs.sort_values("published_at", ascending=False).head(n).to_dict("records")
+    st.markdown(theme.section_head(title, f"{len(docs)} articles"), unsafe_allow_html=True)
+    st.markdown(f"<div class='rail'>{theme.headline_rows(rows, region)}</div>", unsafe_allow_html=True)
+    if n < len(docs):
+        st.button(f"Show more headlines ({len(docs) - n} left)", key=f"fc_showmore_{key}",
+                  on_click=_more, args=(key, step))
+
+
+def _more(key: str, step: int) -> None:
+    st.session_state[f"more_{key}"] = st.session_state.get(f"more_{key}", step) + step
 
 
 # --------------------------------------------------------------------------- pages
@@ -216,7 +241,7 @@ def _story_grid(clusters: list[dict], where: str, cols: int = 2) -> None:
 def _rail(clusters: list[dict], docs: pd.DataFrame, region: str, word_freq=None) -> None:
     st.markdown(theme.rail_ranked("Most covered", sorted(clusters, key=lambda c: -c["size"])[:6]),
                 unsafe_allow_html=True)
-    latest = docs.sort_values("published_at", ascending=False).head(10).to_dict("records")
+    latest = docs.sort_values("published_at", ascending=False).head(15).to_dict("records")
     st.markdown(theme.rail_latest("Latest", latest, region), unsafe_allow_html=True)
     if word_freq:
         chips = "".join(theme.chip(w, "#C8102E") for w, _ in word_freq[:14])
@@ -235,37 +260,52 @@ def render_home(out, model: str, clusters: list[dict], region: str) -> None:
         fc_button(lead, "lead")
         st.markdown(theme.section_head("Top stories", f"{len(clusters)} stories developing now"),
                     unsafe_allow_html=True)
-        _story_grid(clusters[1:11], "top")
+        _story_grid(clusters[1:17], "top")
     with rail:
         _rail(clusters, docs, region, out.word_freq)
-    shown = {c["tid"] for c in clusters[:11]}
-    for name in NAV_MAIN[1:-1]:      # newspaper-style section blocks
-        sec = [c for c in clusters if c["category"] in SECTIONS[name] and c["tid"] not in shown]
+    shown = {c["tid"] for c in clusters[:17]}
+    for name in NAV_MAIN[1:-1] + MORE[:-1]:      # newspaper-style section blocks
+        sec = [c for c in clusters if in_section(c, SECTIONS[name]) and c["tid"] not in shown]
         if not sec:
             continue
-        st.markdown(theme.section_head(name, f"{len(sec)} more"), unsafe_allow_html=True)
-        _story_grid(sec[:3], f"sec_{name}", cols=3)
+        shown |= {c["tid"] for c in sec[:6]}
+        st.markdown(theme.section_head(name, f"{len(sec)} stories"), unsafe_allow_html=True)
+        _story_grid(sec[:6], f"sec_{name}", cols=3)
         st.button(f"More {name} →", key=f"fc_more_{name}", on_click=go, args=(name,))
+    docs = docs.assign(category=docs["topic"].map(lambda t: out.labels[model].get(int(t), {}).get("category", "")))
+    headlines_block(docs, "All headlines", region, "home")
 
 
 def render_section(out, model: str, clusters: list[dict], name: str, region: str) -> None:
     cats = SECTIONS.get(name, [])
     color = theme.cat_color(cats[0]) if cats else "#C8102E"
     st.markdown(theme.page_head(name, color), unsafe_allow_html=True)
-    sec = [c for c in clusters if c["category"] in cats]
-    if not sec:
-        st.info(f"No {name} stories in the current news window. Try a wider time window or another search.")
+    sec = [c for c in clusters if in_section(c, cats)]
+    docs_all = out.doc_frame(model)
+    docs_all = docs_all.assign(category=docs_all["topic"].map(
+        lambda t: out.labels[model].get(int(t), {}).get("category", "")))
+    hint = docs_all["section"].fillna("").isin(cats) if "section" in docs_all else False
+    sec_docs = docs_all[hint | docs_all["category"].isin(cats)]
+    if not sec and sec_docs.empty:
+        st.info(f"No {name} articles in this news window. In Live mode, keep 'Google News sections' and "
+                f"'Edition publishers' selected in the left panel (they include dedicated {name} feeds), "
+                f"or widen the time window. The offline sample has no {name} coverage.")
         return
-    docs = pd.concat([c["docs"] for c in sec])
     main, rail = st.columns([2.15, 1], gap="large")
     with main:
-        st.markdown(theme.lead_story(sec[0]), unsafe_allow_html=True)
-        fc_button(sec[0], "s_lead")
-        if len(sec) > 1:
-            st.markdown(theme.section_head(f"More in {name}"), unsafe_allow_html=True)
-            _story_grid(sec[1:], f"s_{name}")
+        if sec:
+            st.markdown(theme.lead_story(sec[0]), unsafe_allow_html=True)
+            fc_button(sec[0], "s_lead")
+            if len(sec) > 1:
+                st.markdown(theme.section_head(f"More in {name}", f"{len(sec)} stories"), unsafe_allow_html=True)
+                _story_grid(sec[1:], f"s_{name}")
+        headlines_block(sec_docs, f"All {name} headlines", region, f"sec_{name}")
     with rail:
-        _rail(sec, docs, region)
+        if sec:
+            _rail(sec, sec_docs, region)
+        else:
+            latest = sec_docs.sort_values("published_at", ascending=False).head(15).to_dict("records")
+            st.markdown(theme.rail_latest("Latest", latest, region), unsafe_allow_html=True)
 
 
 def render_topic(out, model: str, clusters: list[dict], tid: int, region: str, dark: bool) -> None:
@@ -306,7 +346,7 @@ def render_topic(out, model: str, clusters: list[dict], tid: int, region: str, d
         st.markdown("<div class='rail'><h4>Who is covering it</h4>" + "".join(
             f"<div class='latest'><div class='tm'>{n}</div><div>{theme.esc(s)}</div></div>" for s, n in src.items())
             + "</div>", unsafe_allow_html=True)
-    others = [x for x in clusters if x["category"] == c["category"] and x["tid"] != tid][:4]
+    others = [x for x in clusters if x["category"] == c["category"] and x["tid"] != tid][:6]
     if others:
         st.markdown(theme.section_head(f"More in {theme.short_cat(c['category'])}"), unsafe_allow_html=True)
         _story_grid(others, "rel")

@@ -189,6 +189,50 @@ def detect_language(text: str) -> str:
     return "en" if words and en_hits >= foreign_hits else "non-en"
 
 
+# --------------------------------------------------------------------------- other languages
+_ML_STOP = {
+    "hi": """और के का की को में से है हैं था थे थी पर भी ने यह वह ये वो एक लिए कर करने किया किए गया गई गए हो
+          होने होगा होगी तो ही जो कि जब तक बाद साथ अपने अपनी उन उस इस इन कहा कहते रहे रहा रही नहीं अब
+          सकता सकते सकती बहुत कुछ कई दिया दी दिए लेकर बीच जा जाता जाती जाएगा तरह वाले वाली वाला दौरान
+          आज कल साल दिन समय खबर न्यूज़ लाइव अपडेट वीडियो फोटो""",
+    "fr": """le la les un une des du de d l et en à au aux pour par sur dans avec sans sous ce cette ces cet qui
+          que quoi dont où est sont été être a ont avait avoir fait faire plus moins ne pas se sa son ses leur
+          leurs il elle ils elles on nous vous je tu mais ou donc car comme selon après avant depuis entre très
+          tout tous toute toutes aussi encore déjà an ans jour jours hier aujourd hui direct vidéo photos""",
+    "de": """der die das den dem des ein eine einer einem einen und oder aber in im ins an am auf aus bei mit nach
+          von vom zu zum zur für über unter vor durch gegen ohne um ist sind war waren wird werden wurde wurden
+          hat haben hatte sein es er sie wir ihr ich du nicht kein keine auch noch nur schon so wie als wenn
+          dass sich mehr sehr bis seit jahr jahre tag heute gestern live video fotos""",
+    "es": """el la los las un una unos unas de del y o en a al por para con sin sobre entre que quien cual cuyo
+          donde como cuando es son fue fueron ser ha han había haber hace más menos no se su sus le les lo
+          nos yo tu él ella ellos ellas este esta estos estas ese esa también ya muy todo todos tras según
+          desde hasta año años día hoy ayer directo vídeo fotos""",
+}
+LANG_STOPWORDS: dict[str, frozenset[str]] = {"en": STOPWORDS}
+for _code, _words in _ML_STOP.items():
+    _extra: set[str] = set()
+    try:  # NLTK lists when available
+        from nltk.corpus import stopwords as _sw2  # type: ignore
+
+        _extra = set(_sw2.words({"fr": "french", "de": "german", "es": "spanish"}.get(_code, "")))
+    except Exception:
+        pass
+    LANG_STOPWORDS[_code] = frozenset(set(_words.split()) | _extra)
+
+
+def clean_text_unicode(text: str) -> str:
+    """Script-independent cleaning: keeps letters + combining marks (Devanagari matras), drops the rest."""
+    import unicodedata
+
+    text = html.unescape(text or "")
+    text = TAG_RE.sub(" ", text)
+    text = TRUNC_RE.sub(" ", text)
+    text = URL_RE.sub(" ", text)
+    text = EMAIL_RE.sub(" ", text).lower()
+    text = "".join(ch if (unicodedata.category(ch)[0] in "LM" or ch.isspace()) else " " for ch in text)
+    return WS_RE.sub(" ", text).strip()
+
+
 # --------------------------------------------------------------------------- cleaning
 def clean_text(text: str) -> str:
     text = html.unescape(text or "")
@@ -202,8 +246,11 @@ def clean_text(text: str) -> str:
     return WS_RE.sub(" ", text).strip()
 
 
-def tokenize(text: str) -> list[str]:
+def tokenize(text: str, language: str = "en") -> list[str]:
     """clean -> tokens -> lemmas -> stop-word filtered tokens."""
+    if language != "en":
+        stop = LANG_STOPWORDS.get(language, frozenset())
+        return [w for w in clean_text_unicode(text).split() if len(w) >= 2 and w not in stop]
     cleaned = clean_text(text)
     nlp = _spacy_nlp()
     if nlp is not None:
@@ -232,12 +279,15 @@ def build_text(a: dict) -> str:
 
 
 def preprocess_articles(articles: Iterable[dict], *, english_only: bool = True,
-                        min_tokens: int = 3) -> tuple[pd.DataFrame, dict]:
+                        min_tokens: int = 3, language: str = "en") -> tuple[pd.DataFrame, dict]:
     """Return (dataframe, stats). Dataframe columns:
     id, title, description, content, source, url, published_at, text (raw, for
     embeddings), tokens (list), clean (joined lemmas), language.
     """
     rows = list(articles)
+    if language != "en":            # non-English edition: feeds are already in that language
+        english_only = False
+        min_tokens = min(min_tokens, 2)
     stats = {"input": len(rows), "non_english": 0, "too_short": 0, "duplicates": 0, "errors": 0}
     out = []
     seen_clean: set[str] = set()
@@ -249,11 +299,12 @@ def preprocess_articles(articles: Iterable[dict], *, english_only: bool = True,
                 continue
             seen_ids.add(a.get("id"))
             text = build_text(a)
-            lang = detect_language(f"{a.get('title', '')}. {a.get('description', '')}")
+            lang = detect_language(f"{a.get('title', '')}. {a.get('description', '')}") if language == "en" \
+                else language
             if english_only and lang not in ("en", "unknown"):
                 stats["non_english"] += 1
                 continue
-            toks = tokenize(text)
+            toks = tokenize(text, language)
             if len(toks) < min_tokens:
                 stats["too_short"] += 1
                 continue

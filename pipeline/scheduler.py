@@ -59,7 +59,11 @@ def run_once(args, store: ArticleStore, seen_alerts: set[str]) -> dict:
     store.prune()
     summary = {"fetched": len(rep.articles), "new": new, "errors": rep.errors, "fetch_s": round(rep.seconds, 2)}
     if args.model and new:
-        out = run_pipeline(store.load(hours=args.hours), models=[args.model], n_topics=args.topics)
+        from data.sources import edition_key
+
+        ed = edition_key(args.language, args.country)
+        rows = [r for r in store.load(hours=args.hours) if r.get("edition", ed) == ed]
+        out = run_pipeline(rows, models=[args.model], n_topics=args.topics, language=args.language)
         msgs = [m for model in out.alerts for m in out.alerts[model]]
         fresh = [m for m in msgs if m not in seen_alerts]
         seen_alerts.update(fresh)
@@ -76,8 +80,9 @@ def run_once(args, store: ArticleStore, seen_alerts: set[str]) -> dict:
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--interval", type=float, default=config.FETCH_INTERVAL_MIN, help="minutes between fetches")
-    p.add_argument("--sources", nargs="+", default=["google_news", "rss"],
-                   choices=["google_news", "rss", "newsapi", "gnews", "sample"])
+    p.add_argument("--sources", nargs="+", default=["google_news", "google_sections", "publishers"],
+                   choices=["google_news", "google_sections", "publishers", "international", "rss", "newsapi",
+                            "gnews", "sample"])
     p.add_argument("--query", default="")
     p.add_argument("--language", default="en")
     p.add_argument("--country", default="IN")

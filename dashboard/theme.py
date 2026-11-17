@@ -32,8 +32,10 @@ STATUS_STYLE = {"🆕 Emerging": ("#C8102E", "Breaking"), "📈 Trending": ("#D9
                 "➖ Stable": ("#64748B", "Developing"), "📉 Fading": ("#0284C7", "Earlier")}
 
 REGION_TZ = {"IN": "Asia/Kolkata", "US": "America/New_York", "GB": "Europe/London",
-             "AU": "Australia/Sydney", "CA": "America/Toronto", "SG": "Asia/Singapore"}
-REGION_NAME = {"IN": "India", "US": "US", "GB": "UK", "AU": "Australia", "CA": "Canada", "SG": "Singapore"}
+             "AU": "Australia/Sydney", "CA": "America/Toronto", "SG": "Asia/Singapore",
+             "FR": "Europe/Paris", "DE": "Europe/Berlin", "ES": "Europe/Madrid"}
+REGION_NAME = {"IN": "India", "US": "US", "GB": "UK", "AU": "Australia", "CA": "Canada", "SG": "Singapore",
+               "FR": "France", "DE": "Germany", "ES": "Spain"}
 
 
 def topic_color(i) -> str:
@@ -82,6 +84,8 @@ html, body, .stApp, .stMarkdown, button, input, textarea, select, [class*="css"]
 [data-testid="stSidebar"] button[kind="segmented_controlActive"], [data-testid="stSidebar"] button[aria-checked="true"] {
   background:var(--nl-text) !important; color:var(--nl-bg) !important; border-color:var(--nl-text) !important; }
 [data-testid="stSidebar"] button[kind="segmented_controlActive"] p { color:var(--nl-bg) !important; }
+.edition { font-size:.78rem; padding:7px 10px; margin:4px 0 6px 0; border-left:3px solid var(--nl-red);
+  background:var(--nl-soft); color:var(--nl-text) !important; }
 .sb-foot { margin-top:14px; padding-top:10px; border-top:1px solid var(--nl-border); font-size:.74rem;
   color:var(--nl-muted) !important; display:flex; align-items:center; gap:6px; }
 .sb-foot .dot.ok { background:#16A34A; } .sb-foot .dot.lite { background:#D97706; }
@@ -344,12 +348,13 @@ def image_or_placeholder(url: str, category: str, small: bool = False) -> str:
 
 
 # --------------------------------------------------------------------------- page chrome
-def utility_bar(region: str, live: bool, updated: str) -> str:
+def utility_bar(region: str, live: bool, updated: str, edition: str = "") -> str:
     try:
         now = datetime.now(ZoneInfo(REGION_TZ.get(region, "UTC")))
     except Exception:
         now = datetime.now(timezone.utc)
-    left = f"<span><b>{now.strftime('%A, %d %B %Y')}</b> · {REGION_NAME.get(region, region)} edition</span>"
+    left = (f"<span><b>{now.strftime('%A, %d %B %Y')}</b> · "
+            f"{esc(edition) if edition else REGION_NAME.get(region, region)} edition</span>")
     state = "<span class='live'><i></i>LIVE</span>" if live else "<span class='muted'>Offline sample edition</span>"
     return f"<div class='utility'>{left}<span>{state} · Updated {esc(updated)}</span></div>"
 
@@ -450,6 +455,20 @@ def rail_latest(title: str, rows: list[dict], region: str) -> str:
 def _trim(s: str, n: int) -> str:
     s = str(s or "")
     return s if len(s) <= n else s[: n - 1].rsplit(" ", 1)[0] + "…"
+
+
+def headline_rows(rows: list[dict], region: str, topic_of=None) -> str:
+    """Compact list of articles (time · kicker · headline · source · topic)."""
+    out = []
+    for r in rows:
+        cat = r.get("category") or r.get("section") or ""
+        k = (f"<span class='kicker' style='--c:{cat_color(cat)};margin-right:6px'>{esc(short_cat(cat))}</span>"
+             if cat else "")
+        tp = f" · Topic {int(r['topic'])}" if r.get("topic") is not None and int(r.get("topic", -1)) >= 0 else ""
+        out.append(f"<div class='latest'><div class='tm'>{clock(r['published_at'], region)}</div><div>{k}"
+                   f"{link(r['title'], r.get('url', ''), '')}<div class='meta'><b>{esc(r['source'])}</b> · "
+                   f"{ago(r['published_at'])}{tp}</div></div></div>")
+    return "".join(out)
 
 
 # --------------------------------------------------------------------------- insights components

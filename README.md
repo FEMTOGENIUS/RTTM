@@ -104,7 +104,28 @@ Emerging / bursting topics appear in the TRENDING ticker and as Breaking / Trend
 
 ---
 
-## 3. Real-time operation
+## 3. News sources, languages and regions
+
+Choose **Language** (English, Hindi, French, German, Spanish) and **Region** (India, US, UK, Australia, Canada,
+Singapore, France, Germany, Spain) in the left panel. This changes:
+
+* the **Google News edition** (top stories + every section: World, Nation, Business, Technology, Entertainment,
+  Sports, Science, Health, plus searches for Politics, Climate, Law & Justice, Energy and Startups, in that language),
+* the **publisher feeds** of the edition (e.g. India: The Hindu, Times of India, Hindustan Times, NDTV, Mint,
+  Economic Times, Moneycontrol, India Today; UK: BBC, Guardian, Sky News, Independent; Canada: CBC, Global News;
+  Hindi: BBC Hindi, Navbharat Times, Amar Ujala, NDTV India, Jagran; French: Le Monde sections, France 24, RFI;
+  German: Tagesschau, Spiegel sections, DW, Zeit; Spanish: BBC Mundo, El País, El Mundo, DW, France 24),
+* optional **international publishers** (BBC, Guardian, NYT, NPR, Al Jazeera, DW, France 24, CNBC, TechCrunch,
+  The Verge, Ars Technica, ScienceDaily, WHO, Variety, OilPrice, Carbon Brief, ESPN …),
+* the time zone of all clocks, and the text processing (non-English stop-words and tokenisation; a multilingual
+  sentence-transformer `paraphrase-multilingual-MiniLM-L12-v2` for BERTopic).
+
+All registered feeds live in `data/sources.py` (add or remove lines freely). Every feed is tagged with the section
+it covers, so section pages always have their own stories and topic labels work in every language. Articles are
+stored per edition, so switching language/region never mixes old articles in. Feeds that are down, rate-limited
+(429) or blocked (403) are skipped automatically and listed in Topic Analytics → System.
+
+## 3b. Real-time operation
 
 * The dashboard keeps a rolling **article store** (`data/store/articles.jsonl`), de-duplicated by headline
   hash and URL, pruned after 14 days.

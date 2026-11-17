@@ -66,11 +66,14 @@ def run_pipeline(articles: Iterable[dict], *, models: Iterable[str] = ("BERTopic
                  min_topic_size: int | None = None, lda_passes: int = 10, lda_weighting: str = "bow",
                  embedding_model: str = config.EMBEDDING_MODEL, reduce_outliers: bool = True,
                  english_only: bool = True, bertopic_backend: str = "auto",
-                 lda_backend: str = "auto", random_state: int = config.RANDOM_STATE) -> PipelineOutput:
+                 lda_backend: str = "auto", random_state: int = config.RANDOM_STATE,
+                 language: str = "en") -> PipelineOutput:
     timer = Timer()
     models = [m for m in MODELS if m in set(models)] or ["BERTopic"]
     with timer.stage("preprocess"):
-        df, stats = preprocess_articles(articles, english_only=english_only)
+        df, stats = preprocess_articles(articles, english_only=english_only, language=language)
+    if language != "en" and embedding_model == config.EMBEDDING_MODEL:
+        embedding_model = config.MULTILINGUAL_EMBEDDING_MODEL
     out = PipelineOutput(df=df, prep_stats=stats)
     if len(df) < 3:
         out.warnings.append(f"Only {len(df)} usable articles after preprocessing - "
@@ -113,6 +116,7 @@ def run_pipeline(articles: Iterable[dict], *, models: Iterable[str] = ("BERTopic
             m["runtime_s"] = sum(res.timings.values())
             out.metrics[name] = m
             out.labels[name] = {t: topic_label(t, tw[t]) for t in res.topic_ids}
+            _apply_section_hints(out.labels[name], df, res.assignments)
             if res.doc_coords is None:
                 res.doc_coords = _doc_coords(res)
             names = out.names(name)
@@ -129,6 +133,30 @@ def run_pipeline(articles: Iterable[dict], *, models: Iterable[str] = ("BERTopic
 
 
 # --------------------------------------------------------------------------- helpers
+def _apply_section_hints(labels: dict[int, dict], df: pd.DataFrame, assignments) -> None:
+    """Articles from section feeds (e.g. 'BBC Sport', 'Google News Business') carry a section hint.
+    If most hinted articles of a topic share one section, that section becomes the topic's category.
+    This makes labels correct in every language, where the English keyword dictionary can't help."""
+    if "section" not in df:
+        return
+    sec = df["section"].fillna("").to_numpy()
+    a = np.asarray(assignments)
+    for t, lab in labels.items():
+        hints = [h for h in sec[a == t] if h]
+        n_docs = int((a == t).sum())
+        if not hints or len(hints) < max(2, 0.3 * n_docs):
+            continue
+        top, cnt = pd.Series(hints).value_counts().index[0], pd.Series(hints).value_counts().iloc[0]
+        if cnt / len(hints) >= 0.5 and top != lab["category"]:
+            lab["keyword_category"] = lab["category"]
+            lab["category"] = top
+            lab["name"] = f"Topic {t} ({top})"
+            from utils.labels import ICONS
+
+            lab["icon"] = ICONS.get(top, "📰")
+
+
+
 def _doc_coords(res: TopicResult) -> np.ndarray | None:
     if res.doc_topic is None or res.doc_topic.shape[1] < 2:
         return None
