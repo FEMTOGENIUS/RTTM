@@ -148,6 +148,9 @@ class FakeSt:
     def radio(self, label, options, index=0, key=None, **k):
         return self._ov(key, label, list(options)[index])
 
+    def segmented_control(self, label, options, default=None, key=None, **k):
+        return self._ov(key, label, default if default is not None else list(options)[0])
+
     def selectbox(self, label, options, index=0, key=None, **k):
         return self._ov(key, label, list(options)[index])
 

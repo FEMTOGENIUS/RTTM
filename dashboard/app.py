@@ -88,65 +88,109 @@ def apply_theme(dark: bool) -> None:
 
 
 # --------------------------------------------------------------------------- sidebar
+MODE_LABELS = {"Live (real-time)": "Live", "Static (sample dataset)": "Sample", "Static (upload file)": "Upload"}
+SOURCE_SHORT = {"google_news": "Google News", "rss": "Publisher RSS", "newsapi": "NewsAPI", "gnews": "GNews"}
+
+
+def _segmented(container, label: str, options: list, key: str, default=None, format_func=str, help=None):
+    """Segmented control (Streamlit >= 1.40) with a horizontal-radio fallback.
+    A de-selected segmented control falls back to the last chosen value."""
+    default = default if default is not None else options[0]
+    fn = getattr(container, "segmented_control", None)
+    if callable(fn):
+        try:
+            val = fn(label, options, default=default, format_func=format_func, key=key, help=help)
+        except TypeError:
+            val = None
+        last_key = f"__last_{key}"
+        if val is None:
+            val = st.session_state.get(last_key, default)
+        st.session_state[last_key] = val
+        return val
+    return container.radio(label, options, index=options.index(default), format_func=format_func,
+                           key=key, horizontal=True, help=help)
+
+
+def _section(container, title: str) -> None:
+    container.markdown(f"<div class='sb-sec'>{title}</div>", unsafe_allow_html=True)
+
+
 def sidebar() -> dict:
     s: dict = {}
     sb = st.sidebar
-    sb.title("⚙️ Control panel")
-    sb.caption("Pick a source, a model and explore.")
-    s["dark"] = _toggle_sidebar("🌙 Dark mode", False, "dark")
-    s["mode"] = sb.radio("Data mode", ["Live (real-time)", "Static (sample dataset)", "Static (upload file)"],
-                         key="mode", help="Live mode fetches news from APIs/RSS and keeps a rolling store. "
-                         "Static modes work fully offline.")
-    s["query"] = sb.text_input("🔎 Search query", value="", key="query",
-                               help="Keyword(s) sent to the news sources. Empty = top headlines.").strip()
+    sb.markdown("<div class='brand'><div class='logo'>RT</div><div><div class='bn'>RTTM Console</div>"
+                "<div class='bs'>Real-time news intelligence</div></div></div>", unsafe_allow_html=True)
+
+    _section(sb, "Data source")
+    s["mode"] = _segmented(sb, "Mode", list(MODE_LABELS), key="mode", format_func=MODE_LABELS.get,
+                           help="Live fetches news continuously. Sample and Upload work offline.")
+    s["query"] = sb.text_input("Search query", value="", key="query", placeholder="e.g. india, election, AI",
+                               help="Keywords sent to the news sources. Leave empty for top headlines.").strip()
     if s["mode"].startswith("Live"):
-        s["sources"] = [k for k in SOURCE_OPTIONS if sb.checkbox(
-            SOURCE_OPTIONS[k], value=k in ("google_news", "rss"), key=f"src_{k}")]
+        s["sources"] = sb.multiselect("Sources", list(SOURCE_OPTIONS), default=["google_news", "rss"],
+                                      format_func=SOURCE_SHORT.get, key="sources",
+                                      help="Google News and Publisher RSS need no API key.")
         c1, c2 = sb.columns(2)
         s["language"] = LANGS[c1.selectbox("Language", list(LANGS), key="lang")]
         s["country"] = COUNTRIES[c2.selectbox("Region", list(COUNTRIES), key="country")]
         s["limit"] = sb.slider("Articles per source", 10, 100, 40, 5, key="limit")
-        with sb.expander("🔑 API keys (optional, else read from .env)"):
-            s["newsapi_key"] = st.text_input("NewsAPI key(s), comma-separated", type="password", key="nk")
-            s["gnews_key"] = st.text_input("GNews key(s), comma-separated", type="password", key="gk")
-            s["full_text"] = st.checkbox("Download full article text (newspaper3k, slower)", key="ft")
-        s["auto_refresh"] = sb.checkbox("🔄 Auto-refresh (stream new articles)", value=False, key="auto")
-        s["interval"] = sb.slider("Auto-refresh interval (seconds)", 60, 1800, 300, 30, key="interval",
+        s["auto_refresh"] = sb.toggle("Stream new articles", value=False, key="auto",
+                                      help="Re-fetch automatically and update topics when new articles arrive.") \
+            if hasattr(sb, "toggle") else sb.checkbox("Stream new articles", False, key="auto")
+        s["interval"] = sb.slider("Refresh every (seconds)", 60, 1800, 300, 30, key="interval",
                                   disabled=not s["auto_refresh"])
+        with sb.expander("API keys"):
+            s["newsapi_key"] = st.text_input("NewsAPI key(s)", type="password", key="nk",
+                                             help="Comma-separated; otherwise read from .env / secrets")
+            s["gnews_key"] = st.text_input("GNews key(s)", type="password", key="gk")
+            s["full_text"] = st.checkbox("Download full article text (slower)", key="ft")
     else:
         s.update(sources=[], language="en", country="IN", limit=0, newsapi_key="", gnews_key="",
                  full_text=False, auto_refresh=False, interval=300)
         if s["mode"].endswith("upload file)"):
-            s["upload"] = sb.file_uploader("CSV or JSON with title/description/content/date columns",
-                                           type=["csv", "json"], key="upload")
-    s["window"] = WINDOWS[sb.selectbox("🕒 Time window", list(WINDOWS),
+            s["upload"] = sb.file_uploader("CSV or JSON file", type=["csv", "json"], key="upload",
+                                           help="Columns: title, description/content, date, source, url")
+    s["window"] = WINDOWS[sb.selectbox("Time window", list(WINDOWS),
                                        index=5 if not s["mode"].startswith("Live") else 3, key="window")]
-    sb.markdown("---")
-    sb.subheader("🧠 Topic model")
-    model_choice = sb.radio("Model", ["BERTopic", "LDA", "Compare both"], key="model", horizontal=True)
+
+    _section(sb, "Topic model")
+    model_choice = _segmented(sb, "Model", ["BERTopic", "LDA", "Compare both"], key="model",
+                              format_func=lambda x: "Compare" if x == "Compare both" else x)
     s["models"] = ["BERTopic", "LDA"] if model_choice == "Compare both" else [model_choice]
     s["n_topics"] = sb.slider("Number of topics", 2, 20, 8, key="ntopics")
-    s["bt_auto"] = sb.checkbox("BERTopic: let HDBSCAN choose the number of topics", value=True, key="btauto",
+    s["bt_auto"] = sb.checkbox("Auto topic count for BERTopic (HDBSCAN)", value=True, key="btauto",
                                disabled="BERTopic" not in s["models"])
-    with sb.expander("Advanced model settings"):
-        s["min_topic_size"] = st.number_input("BERTopic min topic size (0 = auto)", 0, 100, 0, key="mts")
-        s["reduce_outliers"] = st.checkbox("Re-assign BERTopic outliers to nearest topic", True, key="ro")
-        s["embedding_model"] = st.text_input("Sentence-transformer model", config.EMBEDDING_MODEL, key="emb")
+    with sb.expander("Advanced settings"):
+        s["min_topic_size"] = st.number_input("Min topic size (0 = auto)", 0, 100, 0, key="mts")
+        s["reduce_outliers"] = st.checkbox("Re-assign outliers to nearest topic", True, key="ro")
+        s["embedding_model"] = st.text_input("Embedding model", config.EMBEDDING_MODEL, key="emb")
         s["lda_passes"] = st.slider("LDA passes", 2, 30, 10, key="passes")
         s["lda_weighting"] = st.radio("LDA input", ["bow", "tfidf"], key="weighting", horizontal=True,
-                                      help="bow = bag-of-words counts (standard); tfidf = TF-IDF weighted matrix")
-        s["english_only"] = st.checkbox("English only (language detection filter)", True, key="eng")
-    s["show_articles"] = sb.checkbox("📄 Show articles in topics", value=True, key="showarts")
-    sb.markdown("---")
+                                      format_func={"bow": "Word counts", "tfidf": "TF-IDF"}.get)
+        s["english_only"] = st.checkbox("English only", True, key="eng")
+
+    _section(sb, "Display")
     c1, c2 = sb.columns(2)
-    s["fetch_now"] = c1.button("📥 Fetch now", disabled=not s["mode"].startswith("Live"), type="primary")
-    s["rerun_models"] = c2.button("♻️ Re-run")
+    with c1:
+        s["dark"] = _toggle("Dark mode", False, "dark")
+    with c2:
+        s["show_articles"] = _toggle("Show articles", True, "showarts")
+
+    sb.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+    c1, c2 = sb.columns(2)
+    s["fetch_now"] = c1.button("Fetch now", disabled=not s["mode"].startswith("Live"), type="primary",
+                               **_btn_stretch())
+    s["rerun_models"] = c2.button("Re-run models", **_btn_stretch())
+    full = HAS_GENSIM and "installed" in backend_summary()["bertopic"]
+    sb.markdown(f"<div class='sb-foot'><span class='dot {'ok' if full else 'lite'}'></span>"
+                f"{'Full NLP stack' if full else 'Lite NLP back-ends'} · v2.1</div>", unsafe_allow_html=True)
     return s
 
 
-def _toggle_sidebar(label: str, value: bool, key: str) -> bool:
-    with st.sidebar:
-        return _toggle(label, value, key)
+def _btn_stretch() -> dict:
+    if NEW_WIDTH_API:
+        return {"width": "stretch"}
+    return {"use_container_width": True}
 
 
 # --------------------------------------------------------------------------- data

@@ -104,6 +104,33 @@ small, .muted {{ color:{muted} !important; }}
   rgba(245,158,11,.08)); border:1px solid rgba(244,63,94,.28); border-radius:14px; padding:10px 14px; margin:6px 0; }}
 .alert b {{ color:#E11D48 !important; }}
 
+/* ---------- sidebar ---------- */
+[data-testid="stSidebar"] .block-container, [data-testid="stSidebarUserContent"] {{ padding-top:1rem; }}
+.brand {{ display:flex; gap:12px; align-items:center; padding:4px 2px 14px 2px; border-bottom:1px solid {border};
+  margin-bottom:6px; }}
+.brand .logo {{ width:40px; height:40px; border-radius:12px; display:flex; align-items:center; justify-content:center;
+  color:#fff !important; font-weight:800; font-size:.95rem; letter-spacing:.02em;
+  background:linear-gradient(135deg,#6366F1,#DB2777); box-shadow:0 8px 18px -8px rgba(99,102,241,.7); }}
+.brand .bn {{ font-weight:800; font-size:1.02rem; color:{text} !important; line-height:1.2; }}
+.brand .bs {{ font-size:.76rem; color:{muted} !important; }}
+.sb-sec {{ font-size:.68rem; font-weight:700; letter-spacing:.12em; text-transform:uppercase;
+  color:{muted} !important; margin:18px 0 4px 0; display:flex; align-items:center; gap:8px; }}
+.sb-sec:after {{ content:""; flex:1; height:1px; background:{border}; }}
+[data-testid="stSidebar"] label p, [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {{
+  font-size:.8rem !important; font-weight:600 !important; color:{muted} !important; }}
+[data-testid="stSidebar"] [data-baseweb="select"] > div, [data-testid="stSidebar"] input {{ border-radius:10px !important; }}
+[data-testid="stSidebar"] [data-testid="stExpander"] {{ border:1px solid {border}; border-radius:12px; }}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary p {{ font-size:.85rem; font-weight:600; }}
+[data-testid="stSidebar"] [data-baseweb="tag"] {{ background:rgba(99,102,241,.12) !important; border-radius:8px; }}
+[data-testid="stSidebar"] [data-baseweb="tag"] span {{ color:#4F46E5 !important; font-weight:600; }}
+[data-testid="stSidebar"] [data-testid="stSegmentedControl"] button[aria-checked="true"],
+[data-testid="stSidebar"] button[kind="segmented_controlActive"] {{ background:#6366F1 !important; color:#fff !important;
+  border-color:#6366F1 !important; }}
+.sb-foot {{ margin-top:14px; padding-top:10px; border-top:1px solid {border}; font-size:.74rem; color:{muted} !important;
+  display:flex; align-items:center; gap:8px; }}
+.sb-foot .dot {{ width:8px; height:8px; border-radius:50%; display:inline-block; }}
+.sb-foot .dot.ok {{ background:#10B981; }} .sb-foot .dot.lite {{ background:#F59E0B; }}
+
 /* ---------- tabs ---------- */
 .stTabs [data-baseweb="tab-list"] {{ gap:6px; background:{panel}; padding:6px; border-radius:14px;
   border:1px solid {border}; }}
