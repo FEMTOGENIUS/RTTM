@@ -1,0 +1,668 @@
+"""Streamlit dashboard - Real-Time Topic Modeling for News Articles.
+
+Run:  streamlit run main.py
+"""
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import time
+from datetime import datetime, timedelta, timezone
+
+import pandas as pd
+import streamlit as st
+
+import config
+from dashboard import charts
+from data.fetchers import fetch_all, load_records, load_sample
+from data.store import ArticleStore
+from models import engine
+from models.bertopic_model import backend_summary
+from models.lda_model import HAS_GENSIM
+from utils.logging_setup import get_logger, tail_log
+from utils.preprocess import backend_info
+
+log = get_logger("dashboard")
+
+SOURCE_OPTIONS = {
+    "google_news": "Google News RSS (no key)",
+    "rss": "RSS feeds: BBC, Al Jazeera, CNN, Indian Express, Guardian, NPR (no key)",
+    "newsapi": "NewsAPI.org (API key)",
+    "gnews": "GNews.io (API key)",
+}
+LANGS = {"English": "en", "Hindi": "hi", "French": "fr", "German": "de", "Spanish": "es"}
+COUNTRIES = {"India": "IN", "United States": "US", "United Kingdom": "GB", "Australia": "AU",
+             "Canada": "CA", "Singapore": "SG"}
+WINDOWS = {"Last 6 hours": 6, "Last 12 hours": 12, "Last 24 hours": 24, "Last 48 hours": 48,
+           "Last 3 days": 72, "Last 7 days": 168, "All stored": None}
+
+
+# --------------------------------------------------------------------------- version helpers
+def _st_version() -> tuple[int, int]:
+    try:
+        major, minor = st.__version__.split(".")[:2]
+        return int(major), int(minor)
+    except Exception:
+        return (1, 40)
+
+
+NEW_WIDTH_API = _st_version() >= (1, 50)
+
+
+def _stretch() -> dict:
+    return {"width": "stretch"} if NEW_WIDTH_API else {"use_container_width": True}
+
+
+def _image_stretch() -> dict:
+    if NEW_WIDTH_API:
+        return {"width": "stretch"}
+    return {"use_container_width": True} if _st_version() >= (1, 40) else {"use_column_width": True}
+
+
+def plot(fig, key: str | None = None):
+    st.plotly_chart(fig, key=key, **_stretch())
+
+
+def table(df: pd.DataFrame, **kw):
+    st.dataframe(df, hide_index=True, **_stretch(), **kw)
+
+
+def _toggle(label: str, value: bool, key: str, help: str | None = None) -> bool:
+    fn = getattr(st, "toggle", st.checkbox)
+    return fn(label, value=value, key=key, help=help)
+
+
+# --------------------------------------------------------------------------- theme
+def apply_theme(dark: bool) -> None:
+    """Light / dark mode toggle (Streamlit theme + matching CSS + plotly template)."""
+    want = "dark" if dark else "light"
+    try:
+        from streamlit import config as st_config
+
+        if st_config.get_option("theme.base") != want:
+            st_config.set_option("theme.base", want)
+    except Exception:
+        pass
+    if dark:
+        css = """
+        .stApp {background-color:#0e1117; color:#fafafa;}
+        [data-testid="stSidebar"] {background-color:#161a23;}
+        .stApp h1,.stApp h2,.stApp h3,.stApp h4,.stApp p,.stApp label,.stApp span,.stApp li {color:#fafafa;}
+        """
+    else:
+        css = """
+        .stApp {background: linear-gradient(180deg,#f7fbff 0%,#ffffff 30%);}
+        [data-testid="stSidebar"] {background-color:#eef5fb;}
+        """
+    css += """
+    .topic-chip {display:inline-block;padding:2px 10px;margin:2px;border-radius:12px;
+                 background:#cfe8ff;color:#023047;font-size:0.82rem;}
+    div[data-testid="stMetricValue"] {font-size:1.6rem;}
+    """
+    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+
+
+# --------------------------------------------------------------------------- sidebar
+def sidebar() -> dict:
+    s: dict = {}
+    sb = st.sidebar
+    sb.title("⚙️ Controls")
+    s["dark"] = _toggle_sidebar("🌙 Dark mode", False, "dark")
+    s["mode"] = sb.radio("Data mode", ["Live (real-time)", "Static (sample dataset)", "Static (upload file)"],
+                         key="mode", help="Live mode fetches news from APIs/RSS and keeps a rolling store. "
+                         "Static modes work fully offline.")
+    s["query"] = sb.text_input("🔎 Search query", value="", key="query",
+                               help="Keyword(s) sent to the news sources. Empty = top headlines.").strip()
+    if s["mode"].startswith("Live"):
+        s["sources"] = [k for k in SOURCE_OPTIONS if sb.checkbox(
+            SOURCE_OPTIONS[k], value=k in ("google_news", "rss"), key=f"src_{k}")]
+        c1, c2 = sb.columns(2)
+        s["language"] = LANGS[c1.selectbox("Language", list(LANGS), key="lang")]
+        s["country"] = COUNTRIES[c2.selectbox("Region", list(COUNTRIES), key="country")]
+        s["limit"] = sb.slider("Articles per source", 10, 100, 40, 5, key="limit")
+        with sb.expander("🔑 API keys (optional, else read from .env)"):
+            s["newsapi_key"] = st.text_input("NewsAPI key(s), comma-separated", type="password", key="nk")
+            s["gnews_key"] = st.text_input("GNews key(s), comma-separated", type="password", key="gk")
+            s["full_text"] = st.checkbox("Download full article text (newspaper3k, slower)", key="ft")
+        s["auto_refresh"] = sb.checkbox("🔄 Auto-refresh (stream new articles)", value=False, key="auto")
+        s["interval"] = sb.slider("Auto-refresh interval (seconds)", 60, 1800, 300, 30, key="interval",
+                                  disabled=not s["auto_refresh"])
+    else:
+        s.update(sources=[], language="en", country="IN", limit=0, newsapi_key="", gnews_key="",
+                 full_text=False, auto_refresh=False, interval=300)
+        if s["mode"].endswith("upload file)"):
+            s["upload"] = sb.file_uploader("CSV or JSON with title/description/content/date columns",
+                                           type=["csv", "json"], key="upload")
+    s["window"] = WINDOWS[sb.selectbox("🕒 Time window", list(WINDOWS),
+                                       index=5 if not s["mode"].startswith("Live") else 3, key="window")]
+    sb.markdown("---")
+    sb.subheader("🧠 Topic model")
+    model_choice = sb.radio("Model", ["BERTopic", "LDA", "Compare both"], key="model", horizontal=True)
+    s["models"] = ["BERTopic", "LDA"] if model_choice == "Compare both" else [model_choice]
+    s["n_topics"] = sb.slider("Number of topics", 2, 20, 8, key="ntopics")
+    s["bt_auto"] = sb.checkbox("BERTopic: let HDBSCAN choose the number of topics", value=True, key="btauto",
+                               disabled="BERTopic" not in s["models"])
+    with sb.expander("Advanced model settings"):
+        s["min_topic_size"] = st.number_input("BERTopic min topic size (0 = auto)", 0, 100, 0, key="mts")
+        s["reduce_outliers"] = st.checkbox("Re-assign BERTopic outliers to nearest topic", True, key="ro")
+        s["embedding_model"] = st.text_input("Sentence-transformer model", config.EMBEDDING_MODEL, key="emb")
+        s["lda_passes"] = st.slider("LDA passes", 2, 30, 10, key="passes")
+        s["lda_weighting"] = st.radio("LDA input", ["bow", "tfidf"], key="weighting", horizontal=True,
+                                      help="bow = bag-of-words counts (standard); tfidf = TF-IDF weighted matrix")
+        s["english_only"] = st.checkbox("English only (language detection filter)", True, key="eng")
+    s["show_articles"] = sb.checkbox("📄 Show articles in topics", value=True, key="showarts")
+    sb.markdown("---")
+    c1, c2 = sb.columns(2)
+    s["fetch_now"] = c1.button("📥 Fetch now", disabled=not s["mode"].startswith("Live"))
+    s["rerun_models"] = c2.button("♻️ Re-run models")
+    return s
+
+
+def _toggle_sidebar(label: str, value: bool, key: str) -> bool:
+    with st.sidebar:
+        return _toggle(label, value, key)
+
+
+# --------------------------------------------------------------------------- data
+def do_fetch(s: dict, store: ArticleStore) -> dict:
+    nk = [k.strip() for k in s.get("newsapi_key", "").split(",") if k.strip()] or None
+    gk = [k.strip() for k in s.get("gnews_key", "").split(",") if k.strip()] or None
+    rep = fetch_all(s["sources"], query=s["query"], language=s["language"], limit=s["limit"],
+                    hours=s["window"] or 72, newsapi_keys=nk, gnews_keys=gk, country=s["country"],
+                    full_text=s.get("full_text", False))
+    for a in rep.articles:
+        a["query"] = s["query"]
+    new = store.add(rep.articles)
+    store.prune()
+    info = {"time": datetime.now(timezone.utc), "fetched": len(rep.articles), "new": new,
+            "errors": rep.errors, "per_source": rep.per_source, "seconds": rep.seconds}
+    st.session_state["last_fetch"] = info
+    st.session_state["last_fetch_ts"] = time.time()
+    st.session_state["fetched_for"] = (tuple(s["sources"]), s["query"], s["language"], s["country"])
+    return info
+
+
+def _matches_query(a: dict, query: str) -> bool:
+    if not query:
+        return True
+    if a.get("query", None) == query:
+        return True
+    blob = f"{a.get('title', '')} {a.get('description', '')} {a.get('content', '')}".lower()
+    return any(t in blob for t in query.lower().split())
+
+
+def _in_window(rows: list[dict], hours: float | None) -> list[dict]:
+    if not hours:
+        return rows
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    return [r for r in rows if datetime.fromisoformat(r["published_at"]) >= cutoff]
+
+
+def load_articles(s: dict, store: ArticleStore) -> list[dict]:
+    if s["mode"].startswith("Live"):
+        key = (tuple(s["sources"]), s["query"], s["language"], s["country"])
+        if not s["sources"]:
+            st.warning("Select at least one news source in the sidebar.")
+            return []
+        if s["fetch_now"] or st.session_state.get("fetched_for") != key:
+            with st.spinner("Fetching live news…"):
+                do_fetch(s, store)
+        rows = [r for r in store.load(hours=s["window"]) if _matches_query(r, s["query"])]
+        return rows
+    if s["mode"].startswith("Static (sample"):
+        rows = load_sample()
+    else:
+        up = s.get("upload")
+        if up is None:
+            st.info("Upload a CSV/JSON file in the sidebar, or switch to the sample dataset.")
+            return []
+        try:
+            if up.name.lower().endswith(".csv"):
+                recs = pd.read_csv(up).to_dict("records")
+            else:
+                raw = json.load(io.TextIOWrapper(up, encoding="utf-8"))
+                recs = raw.get("articles", raw) if isinstance(raw, dict) else raw
+            rows = load_records(recs)
+        except Exception as exc:
+            st.error(f"Could not read the file: {exc}")
+            log.error("upload failed: %s", exc)
+            return []
+    rows = [r for r in rows if _matches_query(r, s["query"])]
+    return _in_window(rows, s["window"])
+
+
+def run_models(rows: list[dict], s: dict) -> engine.PipelineOutput:
+    params = dict(models=tuple(s["models"]), n_topics=s["n_topics"],
+                  bertopic_nr_topics="auto" if s["bt_auto"] else s["n_topics"],
+                  min_topic_size=int(s["min_topic_size"]) or None, lda_passes=s["lda_passes"],
+                  lda_weighting=s["lda_weighting"], embedding_model=s["embedding_model"],
+                  reduce_outliers=s["reduce_outliers"], english_only=s["english_only"])
+    key = hashlib.sha1((json.dumps(sorted(r["id"] for r in rows)) + json.dumps(params, default=str))
+                       .encode()).hexdigest()
+    if st.session_state.get("pipeline_key") != key or s["rerun_models"] or "output" not in st.session_state:
+        with st.spinner(f"Running {' + '.join(s['models'])} on {len(rows)} articles…"):
+            out = engine.run_pipeline(rows, **params)
+        st.session_state["output"] = out
+        st.session_state["pipeline_key"] = key
+    return st.session_state["output"]
+
+
+# --------------------------------------------------------------------------- views
+def header(out: engine.PipelineOutput, s: dict, n_rows: int) -> None:
+    st.title("📰 Real-Time News Topic Modeling")
+    st.caption("Live clustering of streaming news into coherent topics with **BERTopic** "
+               "(transformer embeddings + UMAP + HDBSCAN + c-TF-IDF) and **LDA**.")
+    lf = st.session_state.get("last_fetch")
+    c = st.columns(5)
+    c[0].metric("Articles analysed", len(out.df), help=f"{n_rows} loaded before preprocessing")
+    c[1].metric("Sources", out.df["source"].nunique() if not out.df.empty else 0)
+    main_model = s["models"][0] if s["models"][0] in out.results else next(iter(out.results), "-")
+    c[2].metric("Topics", len(out.results[main_model].topic_ids) if main_model in out.results else 0,
+                help=f"model shown: {main_model}")
+    c[3].metric("Pipeline time", f"{out.timings.get('total', 0):.1f}s")
+    if lf and s["mode"].startswith("Live"):
+        c[4].metric("New this fetch", lf["new"],
+                    help=f"last fetch {lf['time'].astimezone().strftime('%H:%M:%S')} · {lf['seconds']:.1f}s")
+    else:
+        c[4].metric("Mode", "Static")
+    for w in out.warnings:
+        st.warning(w)
+    if lf and s["mode"].startswith("Live"):
+        for e in lf["errors"]:
+            st.caption(f"⚠️ {e}")
+    for model in out.results:
+        for a in out.alerts.get(model, []):
+            st.warning(f"🚨 [{model}] {a}")
+
+
+def _pick_model(out: engine.PipelineOutput, s: dict, key: str) -> str | None:
+    avail = [m for m in s["models"] if m in out.results] + [m for m in out.results if m not in s["models"]]
+    if not avail:
+        return None
+    if len(avail) == 1:
+        return avail[0]
+    return st.radio("Model", avail, horizontal=True, key=key)
+
+
+def tab_overview(out, s, dark):
+    model = _pick_model(out, s, "ov_model")
+    if not model:
+        return
+    names = out.names(model)
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        plot(charts.word_freq_bar(out.word_freq, dark), key="wf")
+    with c2:
+        plot(charts.topic_pie(out.results[model].sizes(), names, dark), key="pie")
+    c1, c2 = st.columns(2)
+    with c1:
+        plot(charts.topic_size_bar(out.results[model].sizes(), names, dark), key="sizes")
+    with c2:
+        plot(charts.sources_bar(out.df, dark), key="sources")
+    st.subheader("🛰️ Live feed - latest clustered articles")
+    lab = out.labels[model]
+    feed = out.doc_frame(model).sort_values("published_at", ascending=False).head(15)
+    for _, r in feed.iterrows():
+        L = lab.get(int(r["topic"]), {"icon": "📰", "name": "Outlier"})
+        when = r["published_at"].tz_convert(None).strftime("%d %b %H:%M")
+        link = f"[{r['title']}]({r['url']})" if r.get("url") else r["title"]
+        st.markdown(f"{L['icon']} **{L['name']}** · {link}  \n<small>{r['source']} · {when} UTC</small>",
+                    unsafe_allow_html=True)
+
+
+def tab_topics(out, s, dark):
+    model = _pick_model(out, s, "tp_model")
+    if not model:
+        return
+    res, lab = out.results[model], out.labels[model]
+    q = st.text_input("🔍 Search topics by keyword", key="topic_search",
+                      placeholder="e.g. election, vaccine, AI, budget …")
+    ids = engine.search_topics(out, model, q) if q else res.topic_ids
+    st.caption(f"{len(ids)} of {len(res.topic_ids)} topics · backend: {res.backend}")
+    for n in res.notes:
+        st.caption(f"ℹ️ {n}")
+    sizes = res.sizes()
+    total = max(len(out.df), 1)
+    trends = out.trends.get(model, pd.DataFrame()).set_index("topic") if model in out.trends else pd.DataFrame()
+    docs = out.doc_frame(model)
+    for t in ids:
+        L = lab[t]
+        status = trends.loc[t, "status"] if t in trends.index else ""
+        with st.container(border=True):
+            st.subheader(f"{L['icon']} {L['name']}  ·  {sizes.get(t, 0)} articles "
+                         f"({100 * sizes.get(t, 0) / total:.1f}%)  {status}")
+            words = res.topic_words[t]
+            st.markdown(" ".join(f"<span class='topic-chip'>{w} ({sc:.3f})</span>" for w, sc in words[:10]),
+                        unsafe_allow_html=True)
+            c1, c2 = st.columns(2)
+            with c1:
+                plot(charts.keywords_bar(words, dark), key=f"kw_{model}_{t}")
+            with c2:
+                img = charts.wordcloud_image(words, dark)
+                if img is not None:
+                    st.image(img, **_image_stretch())
+                else:
+                    plot(charts.wordcloud_plotly(words, dark), key=f"wc_{model}_{t}")
+            if s["show_articles"]:
+                with st.expander(f"Show articles for this topic ({sizes.get(t, 0)})"):
+                    sub = docs[docs["topic"] == t].sort_values("published_at", ascending=False)
+                    for _, r in sub.head(50).iterrows():
+                        when = r["published_at"].tz_convert(None).strftime("%d %b %H:%M") if pd.notna(r["published_at"]) else ""
+                        link = f"[{r['title']}]({r['url']})" if r.get("url") else r["title"]
+                        st.markdown(f"- {link}  \n  <small>{r['source']} · {when} · "
+                                    f"confidence {r['confidence']:.2f}</small>", unsafe_allow_html=True)
+                    if len(sub) > 50:
+                        st.caption(f"… and {len(sub) - 50} more (see the Articles tab)")
+
+
+def tab_trends(out, s, dark):
+    model = _pick_model(out, s, "tr_model")
+    if not model:
+        return
+    names = out.names(model)
+    tot = engine.tr.topics_over_time(out.df, out.results[model].assignments, names)
+    if tot.empty or tot["time"].nunique() < 2:
+        st.info("Not enough time spread yet for a timeline – keep the app running or widen the time window.")
+    else:
+        c1, c2 = st.columns([1, 1])
+        value = c1.radio("Show", ["count", "share"], horizontal=True, key="tl_val")
+        stacked = c2.checkbox("Stacked area", key="tl_stack")
+        plot(charts.timeline(tot, value, dark, stacked), key="timeline")
+    trends = out.trends.get(model)
+    if trends is not None and not trends.empty:
+        plot(charts.growth_bar(trends, dark), key="growth")
+        st.markdown("**Trending / fading / emerging topics** (recent window vs. earlier articles; "
+                    "burst z-score = latest time bin vs. history)")
+        table(trends[["status", "name", "total", "recent", "earlier", "growth", "burst_z"]])
+
+
+def tab_maps(out, s, dark):
+    model = _pick_model(out, s, "map_model")
+    if not model:
+        return
+    res = out.results[model]
+    names = out.names(model)
+    c1, c2 = st.columns(2)
+    with c1:
+        plot(charts.intertopic_scatter(engine.intertopic_map(res), names, dark, model), key="itm")
+        st.caption("Distance between bubbles = dissimilarity of topics (Jensen-Shannon for LDA, "
+                   "cosine between topic embeddings for BERTopic); bubble size = number of articles.")
+    with c2:
+        if res.doc_coords is not None:
+            plot(charts.doc_map(res.doc_coords, res.assignments, out.df["title"].tolist(), names, dark, model),
+                 key="docmap")
+            st.caption("Each point is an article (2-D projection of the reduced embedding space).")
+    if model == "LDA" and HAS_GENSIM:
+        with st.expander("pyLDAvis interactive view (gensim LDA)"):
+            try:
+                import pyLDAvis  # type: ignore
+                import pyLDAvis.gensim_models  # type: ignore
+                import streamlit.components.v1 as components
+
+                ex = res.extra
+                vis = pyLDAvis.gensim_models.prepare(ex["model"], ex["corpus"], ex["dictionary"], sort_topics=False)
+                components.html(pyLDAvis.prepared_data_to_html(vis), height=820, scrolling=True)
+                st.caption("Note: pyLDAvis numbers topics 1..K in the model's original order.")
+            except Exception as exc:
+                st.info(f"pyLDAvis not available ({exc}). Install with `pip install pyLDAvis`.")
+
+
+def tab_compare(out, s, dark):
+    if not out.metrics:
+        return
+    rows = []
+    for m, v in out.metrics.items():
+        rows.append({"Model": m, "Backend": out.results[m].backend, "Topics": v["n_topics"],
+                     "Coherence C_V": round(v["coherence_cv"], 3),
+                     "Coherence NPMI": round(v["coherence_npmi"], 3),
+                     "Coherence UMass": round(v["coherence_umass"], 3),
+                     "Diversity (top-25)": f"{100 * v['diversity']:.1f}%",
+                     "Raw outliers": f"{100 * v['outlier_rate_raw']:.1f}%",
+                     "Model runtime (s)": round(v["runtime_s"], 2)})
+    table(pd.DataFrame(rows))
+    hum = feedback_summary()
+    if not hum.empty:
+        st.markdown("**Human interpretability (from the Evaluate tab)**")
+        table(hum)
+    c1, c2 = st.columns(2)
+    with c1:
+        plot(charts.metrics_bar(out.metrics, dark), key="mbar")
+    with c2:
+        plot(charts.latency_bar({f"{m} model": out.metrics[m]["runtime_s"] for m in out.metrics}, dark,
+                                "Model runtime (s)"), key="mlat")
+    if out.comparison:
+        cmp = out.comparison
+        st.markdown(f"**Agreement between models** - Adjusted Rand Index: `{cmp['ari']:.3f}`, "
+                    f"Normalised Mutual Information: `{cmp['nmi']:.3f}` (1 = identical clustering)")
+        ln, bn = out.names("LDA"), out.names("BERTopic")
+        plot(charts.jaccard_heatmap(cmp["jaccard"], [ln[t][:45] for t in cmp["lda_ids"]],
+                                    [bn[t][:45] for t in cmp["bertopic_ids"]], dark), key="jac")
+    elif len(out.results) < 2:
+        st.info("Select **Compare both** in the sidebar to run LDA and BERTopic side by side.")
+    st.caption("C_V coherence (Röder et al., 2015) is computed on the same tokenised articles "
+               "(gensim CoherenceModel when installed, otherwise an equivalent built-in implementation). "
+               "Diversity = unique words among the top-25 words of all topics (Dieng et al., 2020).")
+
+
+def tab_articles(out, s, dark):
+    model = _pick_model(out, s, "art_model")
+    if not model:
+        return
+    d = out.doc_frame(model)
+    c1, c2, c3 = st.columns([2, 2, 3])
+    srcs = c1.multiselect("Source", sorted(d["source"].unique()), key="f_src")
+    tops = c2.multiselect("Topic", sorted(d["topic_name"].unique()), key="f_topic")
+    kw = c3.text_input("Keyword filter", key="f_kw")
+    if srcs:
+        d = d[d["source"].isin(srcs)]
+    if tops:
+        d = d[d["topic_name"].isin(tops)]
+    if kw:
+        m = d["title"].str.contains(kw, case=False, na=False) | d["text"].str.contains(kw, case=False, na=False)
+        d = d[m]
+    if not d.empty:
+        dates = d["published_at"].dt.date
+        lo, hi = dates.min(), dates.max()
+        if lo < hi:
+            rng = st.slider("Date range", min_value=lo, max_value=hi, value=(lo, hi), key="f_dates")
+            d = d[(dates >= rng[0]) & (dates <= rng[1])]
+    view = d[["published_at", "title", "source", "topic_name", "keywords", "confidence", "url"]].sort_values(
+        "published_at", ascending=False)
+    cfg = {}
+    if hasattr(st, "column_config"):
+        cfg = {"url": st.column_config.LinkColumn("url"),
+               "confidence": st.column_config.ProgressColumn("confidence", min_value=0.0, max_value=1.0)}
+    table(view, column_config=cfg)
+    st.caption(f"{len(view)} articles")
+    export = d.drop(columns=["clean"], errors="ignore").copy()
+    export["published_at"] = export["published_at"].astype(str)
+    c1, c2, c3 = st.columns(3)
+    c1.download_button("⬇️ Articles + topics (CSV)", export.to_csv(index=False).encode("utf-8"),
+                       f"articles_{model.lower()}.csv", "text/csv")
+    c2.download_button("⬇️ Articles + topics (JSON)",
+                       export.to_json(orient="records", force_ascii=False, indent=1).encode("utf-8"),
+                       f"articles_{model.lower()}.json", "application/json")
+    c3.download_button("⬇️ Topics + metrics (JSON)", json.dumps(topics_export(out), indent=1, default=str),
+                       "topics_metrics.json", "application/json")
+
+
+def topics_export(out) -> dict:
+    data = {"generated_at": datetime.now(timezone.utc).isoformat(), "n_articles": len(out.df),
+            "preprocessing": out.prep_stats, "timings_s": out.timings, "models": {}}
+    for m, r in out.results.items():
+        sizes = r.sizes()
+        data["models"][m] = {
+            "backend": r.backend,
+            "metrics": {k: v for k, v in out.metrics[m].items()},
+            "topics": [{"id": t, **out.labels[m][t], "size": sizes.get(t, 0),
+                        "words": [[w, round(sc, 5)] for w, sc in r.topic_words[t][:15]]} for t in r.topic_ids],
+        }
+    if out.comparison:
+        data["comparison"] = {"ari": out.comparison["ari"], "nmi": out.comparison["nmi"],
+                              "best_matches": out.comparison["best_matches"]}
+    return data
+
+
+# --------------------------------------------------------------------------- evaluation (human)
+def feedback_summary() -> pd.DataFrame:
+    p = config.FEEDBACK_PATH
+    if not p.exists():
+        return pd.DataFrame()
+    rows = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+    rows = [r for r in rows if r.get("type") == "topic"]
+    if not rows:
+        return pd.DataFrame()
+    d = pd.DataFrame(rows)
+    g = d.groupby("model").agg(ratings=("interpretable", "size"),
+                               interpretable=("interpretable", lambda x: (x == "Yes").mean()),
+                               related=("articles_related", lambda x: (x == "Yes").mean())).reset_index()
+    g["interpretable"] = (100 * g["interpretable"]).round(1).astype(str) + "%"
+    g["related"] = (100 * g["related"]).round(1).astype(str) + "%"
+    return g.rename(columns={"interpretable": "% topics interpretable", "related": "% articles related"})
+
+
+def tab_evaluate(out, s, dark):
+    st.markdown("Human-interpretability review, as described in the evaluation plan: for each topic answer "
+                "*“Can you understand what this topic is about from its keywords?”* and *“Do the articles under "
+                "this topic seem related?”*. Ratings are saved to `logs/feedback.jsonl` and aggregated in the "
+                "**Compare Models** tab.")
+    model = _pick_model(out, s, "ev_model")
+    if not model:
+        return
+    res = out.results[model]
+    docs = out.doc_frame(model)
+    with st.form(f"eval_{model}"):
+        rater = st.text_input("Your name / initials (optional)")
+        answers = {}
+        for t in res.topic_ids:
+            st.markdown(f"**Topic {t}** - {', '.join(res.top_words(t, 10))}")
+            ex = docs[docs["topic"] == t]["title"].head(3).tolist()
+            st.caption(" | ".join(ex))
+            c1, c2 = st.columns(2)
+            answers[t] = (c1.radio("Interpretable?", ["Yes", "Partly", "No"], key=f"i_{model}_{t}", horizontal=True),
+                          c2.radio("Articles related?", ["Yes", "No"], key=f"r_{model}_{t}", horizontal=True))
+        st.markdown("---")
+        usability = st.slider("Overall usability of the dashboard (1-5)", 1, 5, 4)
+        comment = st.text_area("Comments / suggestions")
+        if st.form_submit_button("Submit evaluation"):
+            config.FEEDBACK_PATH.parent.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now(timezone.utc).isoformat()
+            with open(config.FEEDBACK_PATH, "a", encoding="utf-8") as fh:
+                for t, (i, r) in answers.items():
+                    fh.write(json.dumps({"type": "topic", "ts": ts, "rater": rater, "model": model, "topic": t,
+                                         "keywords": res.top_words(t, 10), "interpretable": i,
+                                         "articles_related": r}) + "\n")
+                fh.write(json.dumps({"type": "usability", "ts": ts, "rater": rater, "score": usability,
+                                     "comment": comment}) + "\n")
+            st.success(f"Saved {len(answers)} topic ratings. Thank you!")
+    hum = feedback_summary()
+    if not hum.empty:
+        table(hum)
+
+
+def tab_system(out, s, dark, store: ArticleStore, t_start: float):
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Active back-ends**")
+        info = {"Preprocessing": backend_info(), "BERTopic": backend_summary(),
+                "LDA": "gensim LdaModel" if HAS_GENSIM else "scikit-learn LDA (install gensim for the paper setup)"}
+        st.json(info)
+        st.markdown("**Preprocessing summary**")
+        st.json(out.prep_stats)
+    with c2:
+        timings = dict(out.timings)
+        lf = st.session_state.get("last_fetch")
+        if lf and s["mode"].startswith("Live"):
+            timings = {"fetch (last)": lf["seconds"], **timings}
+        plot(charts.latency_bar(timings, dark, "Latency by stage (s)"), key="sys_lat")
+        render_ph = st.empty()
+        rows = store.all()
+        st.markdown(f"**Article store**: `{store.path}` - {len(rows)} articles")
+        if rows:
+            ts = sorted(r["published_at"] for r in rows)
+            st.caption(f"oldest {ts[0][:16]} · newest {ts[-1][:16]}")
+        if lf:
+            st.markdown("**Last fetch per source**")
+            st.json(lf["per_source"])
+        if st.button("🗑️ Clear article store"):
+            store.clear()
+            st.session_state.pop("fetched_for", None)
+            st.success("Store cleared.")
+    with st.expander("Application log (logs/rttm.log)"):
+        st.code(tail_log(150) or "(empty)", language="log")
+    return render_ph
+
+
+# --------------------------------------------------------------------------- auto refresh
+def auto_refresh(s: dict, store: ArticleStore) -> None:
+    if not (s["mode"].startswith("Live") and s["auto_refresh"]):
+        return
+    interval = int(s["interval"])
+    fragment = getattr(st, "fragment", None) or getattr(st, "experimental_fragment", None)
+    if fragment is None:
+        st.sidebar.warning("Auto-refresh needs streamlit >= 1.37 (pip install -U streamlit).")
+        return
+
+    @fragment(run_every=interval)
+    def _poll():
+        due = time.time() - st.session_state.get("last_fetch_ts", 0) >= interval * 0.95
+        if due:
+            info = do_fetch(s, store)
+            log.info("auto-refresh: %d new articles", info["new"])
+            if info["new"] > 0:
+                st.rerun()
+        nxt = datetime.fromtimestamp(st.session_state.get("last_fetch_ts", time.time()) + interval)
+        st.caption(f"🔄 Streaming: next fetch at {nxt.strftime('%H:%M:%S')}")
+
+    with st.sidebar:
+        _poll()
+
+
+# --------------------------------------------------------------------------- main
+def main() -> None:
+    st.set_page_config(page_title="Real-Time News Topic Modeling", page_icon="📰", layout="wide")
+    t_start = time.perf_counter()
+    s = sidebar()
+    apply_theme(s["dark"])
+    store = ArticleStore()
+    try:
+        rows = load_articles(s, store)
+    except Exception as exc:  # never crash the UI
+        log.exception("loading articles failed")
+        st.error(f"Loading articles failed: {exc}")
+        rows = []
+    auto_refresh(s, store)
+    if not rows:
+        st.title("📰 Real-Time News Topic Modeling")
+        lf = st.session_state.get("last_fetch")
+        if lf and s["mode"].startswith("Live"):
+            for e in lf["errors"]:
+                st.warning(f"⚠️ {e}")
+        st.info("No articles yet. Click **Fetch now**, change the query/time window, check your internet "
+                "connection / API keys, or switch to the sample dataset.")
+        return
+    try:
+        out = run_models(rows, s)
+    except Exception as exc:
+        log.exception("pipeline failed")
+        st.error(f"Topic modeling failed: {exc}")
+        return
+    header(out, s, len(rows))
+    if not out.results:
+        return
+    dark = s["dark"]
+    tabs = st.tabs(["📊 Overview", "🧩 Topics", "📈 Trends", "🗺️ Topic Map", "⚖️ Compare Models",
+                    "📄 Articles & Export", "✅ Evaluate", "🛠️ System"])
+    views = [tab_overview, tab_topics, tab_trends, tab_maps, tab_compare, tab_articles, tab_evaluate]
+    for tab, view in zip(tabs, views):
+        with tab:
+            try:
+                view(out, s, dark)
+            except Exception as exc:  # a broken chart must not take the page down
+                log.exception("view %s failed", view.__name__)
+                st.error(f"This view failed to render: {exc}")
+    with tabs[-1]:
+        render_ph = tab_system(out, s, dark, store, t_start)
+    render_ph.caption(f"Dashboard render time: {time.perf_counter() - t_start:.2f}s "
+                      f"(fetch + preprocessing + models + charts)")

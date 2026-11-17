@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/" version="2.0"><channel><title>Demo World News</title>
+<item><title><![CDATA[Ceasefire talks resume in Geneva]]></title><description><![CDATA[Diplomats met again on Tuesday as pressure for a truce grows.]]></description><link>https://example.com/world/1</link><pubDate>Tue, 17 Nov 2026 08:00:00 GMT</pubDate></item>
+<item><title>Vaccine drive expands to rural districts</title><description>&lt;p&gt;Health workers will visit &lt;b&gt;villages&lt;/b&gt; door to door.&lt;/p&gt;</description><link>https://example.com/health/2</link><dc:date>2026-11-17T06:30:00Z</dc:date></item>
+<item><title></title><description>An item without a title must be skipped.</description></item>
+</channel></rss>

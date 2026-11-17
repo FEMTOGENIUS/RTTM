@@ -1,0 +1,8 @@
+# Extras
+pyLDAvis>=3.4          # interactive LDA view inside the Topic Map tab
+newspaper3k>=0.2.8     # full article text extraction
+lxml_html_clean        # needed by newspaper3k with recent lxml
+fastapi>=0.110         # REST API  (uvicorn api:app)
+uvicorn>=0.29
+httpx>=0.27            # FastAPI TestClient
+pytest>=8

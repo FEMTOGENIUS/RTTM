@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"><title>Demo Atom</title>
+<entry><title>Space agency launches new weather satellite</title><link href="https://example.com/space/1"/><updated>2026-11-16T22:10:00Z</updated><summary>The satellite will improve cyclone forecasts.</summary></entry>
+</feed>

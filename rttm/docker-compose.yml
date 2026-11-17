@@ -1,0 +1,12 @@
+# Dashboard + background ingestion service sharing one article store.
+services:
+  dashboard:
+    build: .
+    ports: ["8501:8501"]
+    env_file: [.env]
+    volumes: ["./data/store:/app/data/store", "./logs:/app/logs"]
+  scheduler:
+    build: .
+    command: ["python", "-m", "pipeline.scheduler", "--interval", "10"]
+    env_file: [.env]
+    volumes: ["./data/store:/app/data/store", "./logs:/app/logs"]
