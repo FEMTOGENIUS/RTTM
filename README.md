@@ -1,4 +1,4 @@
-# 📰 Real-Time Topic Modeling for News Articles
+# 📰 NewsLens — Real-Time Topic Modeling for News Articles
 
 A working implementation of the system described in *“Real-Time Topic Modeling for Streaming News Articles”*
 (paper, project report and presentation): live news ingestion → NLP preprocessing → **LDA** and **BERTopic**
@@ -53,9 +53,26 @@ in the dashboard (**System** tab) - it never crashes because of a missing packag
 
 ---
 
-## 2. Using the dashboard
+## 2. Using the app
 
-**Sidebar**
+NewsLens looks and works like a news website; the topic model runs underneath it.
+
+| Part | What it does |
+|---|---|
+| **Top bar** | date, edition and LIVE indicator · search box · time window · **Settings** · **Refresh** |
+| **Masthead + section menu** | Home · Politics · World · Business · Tech · Sport · Health · Entertainment · **More ▾** (Climate, Law & Justice, Science & Space, Startups, Energy, Other) · **Insights** |
+| **Trending ticker** | scrolling list of breaking / trending stories detected by the trend analysis (hover to pause) |
+| **Home** | lead story with picture and related coverage, *Top stories* grid, *Most covered* and *Latest* rails, hot keywords, newspaper-style section blocks |
+| **Story clusters** | every topic found by BERTopic/LDA becomes a story: lead article + coverage from other publishers + "Full coverage" link |
+| **Full coverage page** | all articles of one story, timeline, who is covering it, related stories |
+| **Insights** | the analytics for the paper: the tabs below |
+
+Settings (gear pop-over): data mode (Live / Sample / Upload), sources, language, region, articles per source,
+streaming + interval, API keys, model (BERTopic / LDA / Compare), number of topics, advanced options, dark mode.
+
+### Insights tabs (analytics)
+
+<details><summary>All settings</summary>
 
 | Control | What it does |
 |---|---|
@@ -72,7 +89,7 @@ in the dashboard (**System** tab) - it never crashes because of a missing packag
 | Advanced | min topic size, outlier re-assignment, embedding model, LDA passes, LDA input (BoW / TF-IDF), English-only filter |
 | 📥 Fetch now / ♻️ Re-run models | manual refresh / model recalibration |
 
-**Tabs**
+</details>
 
 | Tab | Content |
 |---|---|
@@ -85,7 +102,7 @@ in the dashboard (**System** tab) - it never crashes because of a missing packag
 | ✅ Evaluate | human-interpretability review form (saved to `logs/feedback.jsonl`, aggregated in Compare Models) + usability score |
 | 🛠️ System | active back-ends, preprocessing stats, latency per stage, store status, log viewer |
 
-Alerts for emerging / bursting topics appear as banners at the top of the page.
+Emerging / bursting topics appear in the TRENDING ticker and as Breaking / Trending labels on stories.
 
 ---
 

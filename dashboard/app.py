@@ -14,7 +14,7 @@ import pandas as pd
 import streamlit as st
 
 import config
-from dashboard import charts, theme
+from dashboard import charts, news, theme
 from data.fetchers import fetch_all, load_records, load_sample
 from data.store import ArticleStore
 from models import engine
@@ -115,17 +115,14 @@ def _section(container, title: str) -> None:
     container.markdown(f"<div class='sb-sec'>{title}</div>", unsafe_allow_html=True)
 
 
-def sidebar() -> dict:
+def settings_panel() -> dict:
+    """All controls, shown inside the Settings pop-over in the top bar."""
     s: dict = {}
-    sb = st.sidebar
-    sb.markdown("<div class='brand'><div class='logo'>RT</div><div><div class='bn'>RTTM Console</div>"
-                "<div class='bs'>Real-time news intelligence</div></div></div>", unsafe_allow_html=True)
+    sb = st
 
     _section(sb, "Data source")
     s["mode"] = _segmented(sb, "Mode", list(MODE_LABELS), key="mode", format_func=MODE_LABELS.get,
                            help="Live fetches news continuously. Sample and Upload work offline.")
-    s["query"] = sb.text_input("Search query", value="", key="query", placeholder="e.g. india, election, AI",
-                               help="Keywords sent to the news sources. Leave empty for top headlines.").strip()
     if s["mode"].startswith("Live"):
         s["sources"] = sb.multiselect("Sources", list(SOURCE_OPTIONS), default=["google_news", "rss"],
                                       format_func=SOURCE_SHORT.get, key="sources",
@@ -150,8 +147,6 @@ def sidebar() -> dict:
         if s["mode"].endswith("upload file)"):
             s["upload"] = sb.file_uploader("CSV or JSON file", type=["csv", "json"], key="upload",
                                            help="Columns: title, description/content, date, source, url")
-    s["window"] = WINDOWS[sb.selectbox("Time window", list(WINDOWS),
-                                       index=5 if not s["mode"].startswith("Live") else 3, key="window")]
 
     _section(sb, "Topic model")
     model_choice = _segmented(sb, "Model", ["BERTopic", "LDA", "Compare both"], key="model",
@@ -176,14 +171,12 @@ def sidebar() -> dict:
     with c2:
         s["show_articles"] = _toggle("Show articles", True, "showarts")
 
-    sb.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     c1, c2 = sb.columns(2)
-    s["fetch_now"] = c1.button("Fetch now", disabled=not s["mode"].startswith("Live"), type="primary",
-                               **_btn_stretch())
+    s["fetch_now_btn"] = c1.button("Fetch now", disabled=not s["mode"].startswith("Live"), type="primary",
+                                   **_btn_stretch())
     s["rerun_models"] = c2.button("Re-run models", **_btn_stretch())
     full = HAS_GENSIM and "installed" in backend_summary()["bertopic"]
-    sb.markdown(f"<div class='sb-foot'><span class='dot {'ok' if full else 'lite'}'></span>"
-                f"{'Full NLP stack' if full else 'Lite NLP back-ends'} · v2.1</div>", unsafe_allow_html=True)
+    sb.caption(f"{'Full NLP stack' if full else 'Lite NLP back-ends'} · NewsLens v3")
     return s
 
 
@@ -278,41 +271,43 @@ def run_models(rows: list[dict], s: dict) -> engine.PipelineOutput:
 
 
 # --------------------------------------------------------------------------- views
-def header(out: engine.PipelineOutput, s: dict, n_rows: int) -> None:
+def insights_header(out: engine.PipelineOutput, s: dict, n_rows: int) -> None:
     live = s["mode"].startswith("Live")
     lf = st.session_state.get("last_fetch")
     main_model = s["models"][0] if s["models"][0] in out.results else next(iter(out.results), "-")
     n_topics = len(out.results[main_model].topic_ids) if main_model in out.results else 0
-    updated = lf["time"].astimezone().strftime("%H:%M:%S") if (lf and live) else "sample data"
-    tags = [f"Model: {' + '.join(m for m in s['models'])}", f"Updated {updated}"]
-    if s["query"]:
-        tags.append(f"Query: {s['query']}")
-    st.markdown(theme.hero("Real-Time News Topic Modeling",
-                           "Streaming news clustered into coherent topics with <b>BERTopic</b> "
-                           "(transformer embeddings · UMAP · HDBSCAN · c-TF-IDF) and <b>LDA</b>.",
-                           tags, live), unsafe_allow_html=True)
+    st.markdown(theme.page_head("Insights", "#121212"), unsafe_allow_html=True)
+    st.caption("How the topic models see the news: quality metrics, trends, maps, model comparison, export "
+               "and human evaluation.")
     cov = out.metrics.get(main_model, {}).get("coherence_cv")
-    items = [("📰", "Articles analysed", str(len(out.df)), f"{n_rows} loaded"),
-             ("🏷️", "Sources", str(out.df["source"].nunique() if not out.df.empty else 0), "publishers"),
-             ("🧩", "Topics", str(n_topics), main_model),
-             ("⚡", "Pipeline time", f"{out.timings.get('total', 0):.1f}s", "fetch → model → metrics"),
-             (("🆕", "New this fetch", str(lf["new"]), f"{lf['seconds']:.1f}s fetch") if (lf and live) else
-              ("🎯", "Coherence C_V", f"{cov:.2f}" if cov == cov and cov is not None else "-", "higher is better"))]
+    items = [("", "Articles analysed", str(len(out.df)), f"{n_rows} loaded"),
+             ("", "Sources", str(out.df["source"].nunique() if not out.df.empty else 0), "publishers"),
+             ("", "Topics", str(n_topics), main_model),
+             ("", "Pipeline time", f"{out.timings.get('total', 0):.1f}s", "fetch → model → metrics"),
+             (("", "New this fetch", str(lf["new"]), f"{lf['seconds']:.1f}s fetch") if (lf and live) else
+              ("", "Coherence C_V", f"{cov:.2f}" if cov is not None and cov == cov else "-", "higher is better"))]
     st.markdown(theme.kpis(items), unsafe_allow_html=True)
     for w in out.warnings:
         st.warning(w)
-    if lf and live and lf["errors"]:
-        ok = sum(1 for v in lf["per_source"].values() if v)
-        with st.expander(f"⚠️ {len(lf['errors'])} source(s) unavailable right now - {ok} source(s) working "
-                         "fine (click for details)"):
-            for e in lf["errors"]:
-                st.caption(f"• {e}")
-            st.caption("Rate limits (429) and blocks (403) come from the news sites, not from this app. "
-                       "Cloud servers (Codespaces / Streamlit Cloud) share IP addresses and get limited more "
-                       "often - the remaining sources keep the dashboard working.")
-    msgs = [f"[{m}] {a}" for m in out.results for a in out.alerts.get(m, [])][:3]
-    if msgs:
-        st.markdown("".join(theme.alert(m) for m in msgs), unsafe_allow_html=True)
+    alerts = [f"[{m}] {a}" for m in out.results for a in out.alerts.get(m, [])]
+    if alerts:
+        with st.expander(f"Trend alerts ({len(alerts)})"):
+            for a in alerts:
+                st.markdown(f"- {a}")
+
+
+def source_status(s: dict) -> str:
+    lf = st.session_state.get("last_fetch")
+    if not (lf and s["mode"].startswith("Live")):
+        return "<span class='dot' style='background:#94A3B8'></span>Sample edition (offline)"
+    ok = sum(1 for v in lf["per_source"].values() if v)
+    total = len(lf["per_source"])
+    bad = total - ok
+    msg = f"<span class='dot' style='background:#16A34A'></span>{ok} of {total} sources live"
+    if bad:
+        msg += (f" · <span class='dot' style='background:#D97706'></span>{bad} temporarily unavailable "
+                "(rate-limited or blocked by the publisher; see Insights → System)")
+    return msg
 
 
 def _pick_model(out: engine.PipelineOutput, s: dict, key: str) -> str | None:
@@ -339,14 +334,14 @@ def tab_overview(out, s, dark):
     with c1:
         plot(charts.word_freq_bar(out.word_freq, dark), key="wf")
     with c2:
-        st.markdown("#### 🛰️ Live feed")
+        st.markdown("#### Live feed")
         lab = out.labels[model]
         feed = docs.sort_values("published_at", ascending=False).head(12)
         cards = []
         for _, r in feed.iterrows():
             L = lab.get(int(r["topic"]), {"icon": "📰", "category": "Outlier"})
             cards.append(theme.article_card(r["title"], r.get("url", ""), r["source"], r["published_at"],
-                                            f"{L['icon']} {L['category']}", int(r["topic"])))
+                                            theme.short_cat(L['category']), int(r["topic"])))
         st.markdown("".join(cards), unsafe_allow_html=True)
     plot(charts.sources_bar(out.df, dark), key="sources")
 
@@ -370,7 +365,7 @@ def tab_topics(out, s, dark):
     if not model:
         return
     res, lab = out.results[model], out.labels[model]
-    q = st.text_input("🔍 Search topics by keyword", key="topic_search",
+    q = st.text_input("Search topics by keyword", key="topic_search",
                       placeholder="e.g. election, vaccine, AI, budget …")
     ids = engine.search_topics(out, model, q) if q else res.topic_ids
     st.caption(f"{len(ids)} of {len(res.topic_ids)} topics · backend: {res.backend}")
@@ -394,11 +389,11 @@ def tab_topics(out, s, dark):
     st.markdown("&nbsp;")
     # ---- explorer for one topic
     t = _choose("Explore a topic", ids, key=f"pick_{model}",
-                format_func=lambda x: f"{lab[x]['icon']} T{x} · {lab[x]['keywords']}")
+                format_func=lambda x: f"T{x} · {lab[x]['keywords']}")
     L = lab[t]
     color = theme.topic_color(t)
     words = res.topic_words[t]
-    st.markdown(f"<div class='card' style='border-left:6px solid {color}'><h3 style='margin:0'>{L['icon']} "
+    st.markdown(f"<div class='card' style='border-left:6px solid {color}'><h3 style='margin:0'>"
                 f"{theme.esc(L['name'])} {theme.status_badge(status[t])}</h3><div class='muted'>"
                 f"{sizes.get(t, 0)} articles · {100 * sizes.get(t, 0) / total:.1f}% of coverage · "
                 f"label confidence {L['confidence']:.0%}</div><div style='margin-top:8px'>"
@@ -416,9 +411,9 @@ def tab_topics(out, s, dark):
     if s["show_articles"]:
         docs = out.doc_frame(model)
         sub = docs[docs["topic"] == t].sort_values("published_at", ascending=False)
-        st.markdown(f"#### 📄 Articles in this topic ({len(sub)})")
+        st.markdown(f"#### Articles in this topic ({len(sub)})")
         st.markdown("".join(theme.article_card(r["title"], r.get("url", ""), r["source"], r["published_at"],
-                                               f"{L['icon']} T{t}", t, f"· match {r['confidence']:.2f}")
+                                               f"T{t}", t, f"· match {r['confidence']:.2f}")
                             for _, r in sub.head(40).iterrows()), unsafe_allow_html=True)
         if len(sub) > 40:
             st.caption(f"… and {len(sub) - 40} more (see the Articles tab)")
@@ -670,7 +665,7 @@ def auto_refresh(s: dict, store: ArticleStore) -> None:
     interval = int(s["interval"])
     fragment = getattr(st, "fragment", None) or getattr(st, "experimental_fragment", None)
     if fragment is None:
-        st.sidebar.warning("Auto-refresh needs streamlit >= 1.37 (pip install -U streamlit).")
+        st.caption("Auto-refresh needs streamlit >= 1.37 (pip install -U streamlit).")
         return
 
     @fragment(run_every=interval)
@@ -684,15 +679,32 @@ def auto_refresh(s: dict, store: ArticleStore) -> None:
         nxt = datetime.fromtimestamp(st.session_state.get("last_fetch_ts", time.time()) + interval)
         st.caption(f"🔄 Streaming: next fetch at {nxt.strftime('%H:%M:%S')}")
 
-    with st.sidebar:
-        _poll()
+    _poll()
 
 
 # --------------------------------------------------------------------------- main
 def main() -> None:
-    st.set_page_config(page_title="Real-Time News Topic Modeling", page_icon="📰", layout="wide")
+    st.set_page_config(page_title="NewsLens · real-time news, clustered", page_icon="📰", layout="wide",
+                       initial_sidebar_state="collapsed")
     t_start = time.perf_counter()
-    s = sidebar()
+    # ---- top bar: edition line | search | time window | settings | refresh
+    top = st.columns([3.0, 1.6, 1.1, 0.9, 0.9], vertical_alignment="center")
+    util_ph = top[0].empty()
+    with top[3]:            # settings first: the default time window depends on the mode
+        with news._popover("Settings"):
+            s = settings_panel()
+    with top[1]:
+        query = st.text_input("Search", value="", key="query", placeholder="Search news, e.g. election",
+                              label_visibility="collapsed").strip()
+    with top[2]:
+        win_label = st.selectbox("Time window", list(WINDOWS), index=3 if s["mode"].startswith("Live") else 5,
+                                 key="window", label_visibility="collapsed")
+    with top[4]:
+        refresh = st.button("Refresh", type="primary", key="refresh_btn", **_btn_stretch())
+    s["query"], s["window"] = query, WINDOWS[win_label]
+    live = s["mode"].startswith("Live")
+    s["fetch_now"] = bool(s.get("fetch_now_btn")) or (refresh and live)
+    s["rerun_models"] = bool(s.get("rerun_models")) or (refresh and not live)
     apply_theme(s["dark"])
     store = ArticleStore()
     try:
@@ -702,15 +714,16 @@ def main() -> None:
         st.error(f"Loading articles failed: {exc}")
         rows = []
     auto_refresh(s, store)
+    lf = st.session_state.get("last_fetch")
+    updated = lf["time"].astimezone(theme.ZoneInfo(theme.REGION_TZ.get(s["country"], "UTC"))).strftime("%H:%M") \
+        if (lf and live) else "now"
+    util_ph.markdown(theme.utility_bar(s["country"], live, updated), unsafe_allow_html=True)
+    st.markdown(theme.masthead(), unsafe_allow_html=True)
+    news.render_nav()
     if not rows:
-        st.markdown(theme.hero("Real-Time News Topic Modeling", "Waiting for articles…", [],
-                               s["mode"].startswith("Live")), unsafe_allow_html=True)
-        lf = st.session_state.get("last_fetch")
-        if lf and s["mode"].startswith("Live"):
-            for e in lf["errors"]:
-                st.warning(f"⚠️ {e}")
-        st.info("No articles yet. Click **Fetch now**, change the query/time window, check your internet "
-                "connection / API keys, or switch to the sample dataset.")
+        st.info("No articles yet. Press **Refresh**, widen the time window, change the search, or choose "
+                "**Sample** in Settings to explore offline.")
+        st.markdown(theme.footer(source_status(s)), unsafe_allow_html=True)
         return
     try:
         out = run_models(rows, s)
@@ -718,12 +731,37 @@ def main() -> None:
         log.exception("pipeline failed")
         st.error(f"Topic modeling failed: {exc}")
         return
-    header(out, s, len(rows))
     if not out.results:
+        for w in out.warnings:
+            st.warning(w)
         return
+    model = s["models"][0] if s["models"][0] in out.results else next(iter(out.results))
+    clusters = news.build_clusters(out, model)
+    st.markdown(theme.ticker(news.ticker_items(clusters)), unsafe_allow_html=True)
+    page = news.current_page()
     dark = s["dark"]
-    tabs = st.tabs(["📊 Overview", "🧩 Topics", "📈 Trends", "🗺️ Topic Map", "⚖️ Compare Models",
-                    "📄 Articles & Export", "✅ Evaluate", "🛠️ System"])
+    try:
+        if page == "Insights":
+            render_insights(out, s, store, t_start, len(rows))
+        elif page.startswith("topic:"):
+            news.render_topic(out, model, clusters, int(page.split(":", 1)[1]), s["country"], dark)
+        elif page in news.SECTIONS:
+            news.render_section(out, model, clusters, page, s["country"])
+        else:
+            if query:
+                st.markdown(theme.page_head(f"Results for “{query}”"), unsafe_allow_html=True)
+            news.render_home(out, model, clusters, s["country"])
+    except Exception as exc:
+        log.exception("page %s failed", page)
+        st.error(f"This page failed to render: {exc}")
+    st.markdown(theme.footer(source_status(s)), unsafe_allow_html=True)
+
+
+def render_insights(out, s: dict, store: ArticleStore, t_start: float, n_rows: int) -> None:
+    insights_header(out, s, n_rows)
+    dark = s["dark"]
+    tabs = st.tabs(["Overview", "Topics", "Trends", "Topic map", "Compare models", "Articles & export",
+                    "Evaluate", "System"])
     views = [tab_overview, tab_topics, tab_trends, tab_maps, tab_compare, tab_articles, tab_evaluate]
     for tab, view in zip(tabs, views):
         with tab:
@@ -733,6 +771,12 @@ def main() -> None:
                 log.exception("view %s failed", view.__name__)
                 st.error(f"This view failed to render: {exc}")
     with tabs[-1]:
+        lf = st.session_state.get("last_fetch")
+        if lf and lf.get("errors"):
+            st.markdown("**Source status (last fetch)**")
+            for e in lf["errors"]:
+                st.caption(f"• {e}")
+            st.caption("429 = the publisher rate-limited this server; 403 = the publisher blocks automated "
+                       "readers from cloud servers. Other sources keep working.")
         render_ph = tab_system(out, s, dark, store, t_start)
-    render_ph.caption(f"Dashboard render time: {time.perf_counter() - t_start:.2f}s "
-                      f"(fetch + preprocessing + models + charts)")
+    render_ph.caption(f"Render time: {time.perf_counter() - t_start:.2f}s (fetch + preprocessing + models + charts)")

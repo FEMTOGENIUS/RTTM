@@ -1,6 +1,6 @@
 # Light install - works everywhere incl. Streamlit Community Cloud (lite NLP back-ends).
 # For the full paper stack (gensim + BERTopic + MiniLM): pip install -r requirements-full.txt
-streamlit>=1.37
+streamlit>=1.42
 plotly>=5.18
 pandas>=2.0
 numpy>=1.24

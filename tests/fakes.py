@@ -118,9 +118,13 @@ class FakeSt:
         return [FakeSt(self._root) for _ in names]
 
     def expander(self, *a, **k):
+        self._rec("expander", *a)
         return FakeSt(self._root)
 
     def container(self, *a, **k):
+        return FakeSt(self._root)
+
+    def popover(self, *a, **k):
         return FakeSt(self._root)
 
     def form(self, *a, **k):
@@ -167,6 +171,7 @@ class FakeSt:
         return self._ov(key, label, None)
 
     def button(self, label, key=None, **k):
+        self._rec("button", label)
         return self._ov(key, label, False)
 
     def form_submit_button(self, label="Submit", **k):

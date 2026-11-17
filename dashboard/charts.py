@@ -13,6 +13,7 @@ import plotly.graph_objects as go
 from dashboard.theme import CATEGORY_COLORS, PALETTE, topic_color
 
 FONT = "Inter, Segoe UI, system-ui, sans-serif"
+SERIF = "Source Serif 4, Georgia, serif"
 
 
 def template(dark: bool) -> str:
@@ -23,7 +24,7 @@ def _layout(fig: go.Figure, dark: bool, title: str | None = None, height: int = 
     txt = "#E2E8F0" if dark else "#0F172A"
     grid = "rgba(148,163,184,.15)" if dark else "rgba(15,23,42,.06)"
     fig.update_layout(template=template(dark), height=height, colorway=PALETTE,
-                      title=dict(text=f"<b>{title}</b>" if title else None, x=0.01, font=dict(size=15, color=txt)),
+                      title=dict(text=title or None, x=0.01, font=dict(size=17, color=txt, family=SERIF)),
                       font=dict(family=FONT, color=txt, size=12),
                       margin=dict(l=12, r=12, t=52 if title else 16, b=12),
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -52,7 +53,7 @@ def word_freq_bar(word_freq: list[tuple[str, int]], dark: bool = False, top: int
     d = pd.DataFrame(word_freq[:top], columns=["word", "count"])
     d = d.iloc[::-1]
     fig = px.bar(d, x="count", y="word", orientation="h", color="count",
-                 color_continuous_scale=["#C7D2FE", "#6366F1", "#7C3AED"])
+                 color_continuous_scale=["#FECACA", "#C8102E", "#7F1D1D"])
     fig.update_traces(marker_line_width=0, hovertemplate="<b>%{y}</b><br>%{x} mentions<extra></extra>")
     fig.update_layout(coloraxis_showscale=False, xaxis_title="mentions", yaxis_title=None)
     return _layout(fig, dark, "Hot keywords", height=520)
@@ -81,14 +82,14 @@ def topic_size_bar(sizes: dict[int, int], names: dict[int, str], dark: bool = Fa
 
 def sources_bar(df: pd.DataFrame, dark: bool = False, top: int = 15) -> go.Figure:
     d = df["source"].value_counts().head(top).rename_axis("source").reset_index(name="articles")
-    fig = px.bar(d, x="articles", y="source", orientation="h", color_discrete_sequence=["#06B6D4"])
+    fig = px.bar(d, x="articles", y="source", orientation="h", color_discrete_sequence=["#334155"])
     fig.update_layout(yaxis=dict(autorange="reversed", title=None))
     return _layout(fig, dark, "Articles by source", height=max(280, 26 * len(d) + 80))
 
 
 # --------------------------------------------------------------------------- topic detail
 def keywords_bar(words: list[tuple[str, float]], dark: bool = False, n: int = 10,
-                 color: str = "#6366F1") -> go.Figure:
+                 color: str = "#C8102E") -> go.Figure:
     d = pd.DataFrame(words[:n], columns=["keyword", "weight"])
     fig = px.bar(d, x="weight", y="keyword", orientation="h", color_discrete_sequence=[color])
     fig.update_traces(marker_line_width=0, hovertemplate="<b>%{y}</b><br>weight %{x:.4f}<extra></extra>")
@@ -202,7 +203,7 @@ def metrics_bar(metrics: dict[str, dict], dark: bool = False) -> go.Figure:
                 rows.append({"model": model, "metric": label, "value": v})
     d = pd.DataFrame(rows)
     fig = px.bar(d, x="metric", y="value", color="model", barmode="group", text_auto=".2f",
-                 color_discrete_map={"LDA": "#06B6D4", "BERTopic": "#6366F1"})
+                 color_discrete_map={"LDA": "#64748B", "BERTopic": "#C8102E"})
     fig.update_layout(xaxis_title=None, yaxis_title=None)
     return _layout(fig, dark, "Topic quality (higher is better)")
 
@@ -217,7 +218,7 @@ def latency_bar(timings: dict[str, float], dark: bool = False, title: str = "Pip
 
 def jaccard_heatmap(J: np.ndarray, lda_names: list[str], bt_names: list[str], dark: bool = False) -> go.Figure:
     fig = px.imshow(J, x=bt_names, y=lda_names, text_auto=".2f", aspect="auto",
-                    color_continuous_scale=["#EEF2FF", "#818CF8", "#4338CA"], zmin=0, zmax=1,
+                    color_continuous_scale=["#FFF1F2", "#FB7185", "#9F1239"], zmin=0, zmax=1,
                     labels=dict(x="BERTopic topic", y="LDA topic", color="Jaccard"))
     return _layout(fig, dark, "Topic alignment: top-word overlap (LDA vs BERTopic)",
                    height=max(380, 30 * len(lda_names) + 160))

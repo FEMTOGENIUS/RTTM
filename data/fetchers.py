@@ -96,9 +96,21 @@ def parse_date(value: Any) -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_IMG_RE = re.compile(r"<img[^>]+src=[\"']([^\"']+)[\"']", re.I)
+
+
+def first_image(*htmls: str) -> str:
+    for h in htmls:
+        m = _IMG_RE.search(h or "")
+        if m and m.group(1).startswith("http"):
+            return m.group(1)
+    return ""
+
+
 def normalize_article(*, title: str, description: str = "", content: str = "",
                       source: str = "", url: str = "", published_at: Any = None,
-                      language: str = "en", origin: str = "") -> dict:
+                      language: str = "en", origin: str = "", image: str = "") -> dict:
+    image = image or first_image(description, content)
     title = strip_html(title)
     return {
         "id": article_id(title, url),
@@ -110,6 +122,7 @@ def normalize_article(*, title: str, description: str = "", content: str = "",
         "published_at": parse_date(published_at),
         "language": language or "en",
         "origin": origin,
+        "image": image if str(image).startswith("http") else "",
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -185,7 +198,7 @@ def fetch_newsapi(query: str = "", *, language: str = "en", page_size: int = 50,
                 title=a.get("title", ""), description=a.get("description") or "",
                 content=a.get("content") or "", source=(a.get("source") or {}).get("name", ""),
                 url=a.get("url", ""), published_at=a.get("publishedAt"),
-                language=language, origin="newsapi"))
+                language=language, origin="newsapi", image=a.get("urlToImage") or ""))
         log.info("NewsAPI: %d articles (query=%r)", len(out), query)
         return out
     raise FetchError(f"NewsAPI: all keys exhausted - {last_err}")
@@ -231,7 +244,7 @@ def fetch_gnews(query: str = "", *, language: str = "en", max_results: int = 50,
                 title=a.get("title", ""), description=a.get("description") or "",
                 content=a.get("content") or "", source=(a.get("source") or {}).get("name", ""),
                 url=a.get("url", ""), published_at=a.get("publishedAt"),
-                language=language, origin="gnews"))
+                language=language, origin="gnews", image=a.get("image") or ""))
         log.info("GNews: %d articles (query=%r)", len(out), query)
         return out
     raise FetchError(f"GNews: all keys exhausted - {last_err}")
@@ -240,6 +253,18 @@ def fetch_gnews(query: str = "", *, language: str = "en", max_results: int = 50,
 # --------------------------------------------------------------------------- RSS / Atom
 _ATOM = "{http://www.w3.org/2005/Atom}"
 _MEDIA_NS = ("{http://purl.org/rss/1.0/modules/content/}encoded",)
+_MRSS = "{http://search.yahoo.com/mrss/}"
+
+
+def _xml_image(it: ET.Element) -> str:
+    for tag in (f"{_MRSS}thumbnail", f"{_MRSS}content", f"{_MRSS}group/{_MRSS}content"):
+        el = it.find(tag)
+        if el is not None and el.get("url", "").startswith("http"):
+            return el.get("url")
+    enc = it.find("enclosure")
+    if enc is not None and enc.get("type", "").startswith("image"):
+        return enc.get("url", "")
+    return ""
 
 
 def _txt(el: ET.Element | None) -> str:
@@ -261,7 +286,7 @@ def parse_feed_xml(xml_text: str | bytes, source_name: str = "RSS") -> list[dict
         items.append(dict(title=_txt(it.find("title")), description=_txt(it.find("description")),
                           content=content, url=_txt(it.find("link")),
                           published_at=_txt(it.find("pubDate")) or _txt(it.find("{http://purl.org/dc/elements/1.1/}date")),
-                          source=_txt(src_el) or source_name or channel_title))
+                          source=_txt(src_el) or source_name or channel_title, image=_xml_image(it)))
     for it in root.iter(f"{_ATOM}entry"):
         link_el = it.find(f"{_ATOM}link")
         items.append(dict(title=_txt(it.find(f"{_ATOM}title")),
@@ -269,7 +294,7 @@ def parse_feed_xml(xml_text: str | bytes, source_name: str = "RSS") -> list[dict
                           content=_txt(it.find(f"{_ATOM}content")),
                           url=link_el.get("href", "") if link_el is not None else "",
                           published_at=_txt(it.find(f"{_ATOM}published")) or _txt(it.find(f"{_ATOM}updated")),
-                          source=source_name or channel_title))
+                          source=source_name or channel_title, image=_xml_image(it)))
     return items
 
 
@@ -309,7 +334,11 @@ def fetch_rss(feeds: dict[str, str], *, query: str = "", limit_per_feed: int = 5
                             content=(e.get("content") or [{}])[0].get("value", "") if e.get("content") else "",
                             url=e.get("link", ""),
                             published_at=e.get("published_parsed") or e.get("updated_parsed") or e.get("published"),
-                            source=(e.get("source") or {}).get("title") or name)
+                            source=(e.get("source") or {}).get("title") or name,
+                            image=((e.get("media_thumbnail") or [{}])[0].get("url")
+                                   or (e.get("media_content") or [{}])[0].get("url")
+                                   or next((l.get("href") for l in e.get("links", [])
+                                            if str(l.get("type", "")).startswith("image")), "") or ""))
                        for e in parsed.entries]
             else:
                 raw = parse_feed_xml(r.content, name)
@@ -318,10 +347,13 @@ def fetch_rss(feeds: dict[str, str], *, query: str = "", limit_per_feed: int = 5
                 if not a.get("title"):
                     continue
                 a["description"] = flatten_link_list(a.get("description", ""))
+                a.setdefault("image", "")
                 blob = f"{a.get('title', '')} {a.get('description', '')}".lower()
                 if terms and not any(t in blob for t in terms):
                     continue
-                out.append(normalize_article(origin="rss", language="en", **a))
+                art = normalize_article(origin="rss", language="en", **a)
+                art["feed"] = name
+                out.append(art)
                 n += 1
                 if n >= limit_per_feed:
                     break
@@ -458,9 +490,11 @@ def fetch_all(sources: list[str], *, query: str = "", language: str = "en",
                                                             limit=limit, session=session)
     if "rss" in sources:
         def _rss():
-            arts, errs = fetch_rss(rss_feeds or config.RSS_FEEDS, query=query,
-                                   limit_per_feed=max(5, limit // 2), session=session)
+            feeds = rss_feeds or config.RSS_FEEDS
+            arts, errs = fetch_rss(feeds, query=query, limit_per_feed=max(5, limit // 2), session=session)
             rep.errors.extend(errs)
+            for name in feeds:   # per-feed status (so the UI can say "9 of 13 sources working")
+                rep.per_source[name] = sum(1 for a in arts if a.get("feed") == name)
             return arts
         jobs["RSS feeds"] = _rss
     if "newsapi" in sources:
@@ -474,10 +508,12 @@ def fetch_all(sources: list[str], *, query: str = "", language: str = "en",
     for name, job in jobs.items():
         try:
             arts = job()
-            rep.per_source[name] = len(arts)
+            if name != "RSS feeds":
+                rep.per_source[name] = len(arts)
             rep.articles.extend(arts)
         except Exception as exc:
-            rep.per_source[name] = 0
+            if name != "RSS feeds":
+                rep.per_source[name] = 0
             rep.errors.append(f"{name}: {exc}")
             log.error("%s failed: %s", name, exc)
     # de-duplicate within the batch
