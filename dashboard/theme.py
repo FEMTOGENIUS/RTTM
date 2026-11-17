@@ -1,4 +1,4 @@
-"""NewsLens design system: newspaper typography (masthead + serif headlines),
+"""NEWS23 (MT27) design system: newspaper typography (masthead + serif headlines),
 BBC-style navigation, trending ticker, Google-News-style story clusters.
 Pure CSS + small HTML builders; every user-visible string is escaped."""
 from __future__ import annotations
@@ -10,7 +10,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-BRAND = "NewsLens"
+BRAND = "NEWS23"
+BRAND_CODE = "MT27"
 TAGLINE = "Every story, clustered in real time"
 
 PALETTE = ["#2563EB", "#DC2626", "#059669", "#D97706", "#7C3AED", "#DB2777", "#0891B2", "#65A30D",
@@ -94,6 +95,19 @@ html, body, .stApp, .stMarkdown, button, input, textarea, select, [class*="css"]
 .mstrip .l { font-size:.66rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; color:var(--nl-muted) !important; }
 .mstrip .v { font-family:'Source Serif 4', Georgia, serif; font-size:1.25rem; font-weight:700; color:var(--nl-text) !important; }
 .mstrip .s { font-size:.7rem; color:var(--nl-muted) !important; }
+.mstrip .rate { font-family:'Inter', sans-serif; font-size:.66rem; font-weight:700; text-transform:uppercase;
+  letter-spacing:.06em; color:var(--nl-red) !important; vertical-align:middle; }
+.mstrip > div { cursor:help; }
+table.score { width:100%; border-collapse:collapse; font-size:.86rem; margin:6px 0 10px 0; }
+table.score th { text-align:left; background:var(--nl-text); color:var(--nl-bg) !important; padding:9px 10px;
+  font-size:.78rem; letter-spacing:.04em; }
+table.score th .rt { color:var(--nl-bg) !important; opacity:.75; font-weight:400; }
+table.score td { border-bottom:1px solid var(--nl-border); padding:9px 10px; vertical-align:top; }
+table.score td.mn { width:17%; cursor:help; } table.score td.mm { width:43%; color:var(--nl-muted) !important; }
+table.score td.win { background:rgba(22,163,74,.10); box-shadow:inset 3px 0 0 #16A34A; }
+table.score .rt { font-size:.72rem; color:var(--nl-muted) !important; }
+.verdict { border-left:4px solid var(--nl-red); background:var(--nl-soft); padding:10px 14px; margin:4px 0 14px 0;
+  font-size:.9rem; }
 .tline { font-size:.72rem; color:var(--nl-muted) !important; margin:2px 0 4px 0; }
 .tline b { color:var(--nl-text) !important; font-weight:700; }
 .tline .kw { display:inline-block; padding:0 6px; margin-right:4px; border-radius:3px; background:var(--nl-soft);
@@ -117,6 +131,9 @@ a { color:inherit; }
 .masthead .name { font-family:'Playfair Display', Georgia, serif !important; font-weight:900; font-size:3.1rem;
   letter-spacing:-.01em; line-height:1; color:var(--nl-text) !important; }
 .masthead .name span { color:var(--nl-red) !important; }
+.masthead .name sup { font-family:'Inter', sans-serif; font-size:.9rem; font-weight:700; letter-spacing:.12em;
+  color:var(--nl-muted) !important; vertical-align:top; margin-left:8px; position:relative; top:.6rem; }
+.brand .bn small { font-family:'Inter', sans-serif; font-size:.7rem; color:var(--nl-muted) !important; font-weight:700; }
 .masthead .tag { font-size:.8rem; letter-spacing:.22em; text-transform:uppercase; color:var(--nl-muted) !important;
   margin-top:6px; }
 .rule { border-top:3px double var(--nl-text); margin:6px 0 0 0; }
@@ -338,7 +355,7 @@ def utility_bar(region: str, live: bool, updated: str) -> str:
 
 
 def masthead() -> str:
-    return (f"<div class='masthead'><div class='name'>News<span>Lens</span></div>"
+    return (f"<div class='masthead'><div class='name'>NEWS<span>23</span><sup>({BRAND_CODE})</sup></div>"
             f"<div class='tag'>{esc(TAGLINE)}</div></div><div class='rule'></div>")
 
 
@@ -361,16 +378,23 @@ def page_head(title: str, color: str = "#C8102E") -> str:
 
 
 def footer(status_html: str) -> str:
-    return (f"<div class='foot'><span class='b'>News<span style='color:#C8102E'>Lens</span></span>"
+    return (f"<div class='foot'><span class='b'>NEWS<span style='color:#C8102E'>23</span> ({BRAND_CODE})</span>"
             f"<span>{status_html}</span><span>Topic modeling with BERTopic &amp; LDA · headlines link to "
             f"the original publishers</span></div>")
 
 
 # --------------------------------------------------------------------------- research panel
-def model_strip(items: list[tuple[str, str, str]]) -> str:
-    cells = "".join(f"<div><div class='l'>{esc(a)}</div><div class='v'>{esc(b)}</div><div class='s'>{esc(c)}</div></div>"
-                    for a, b, c in items)
-    return f"<div class='mstrip'>{cells}</div>"
+def model_strip(items: list[tuple]) -> str:
+    """items: (label, value, sub[, tooltip[, rating]])"""
+    cells = []
+    for it in items:
+        a, b, c = it[:3]
+        tip = it[3] if len(it) > 3 else ""
+        rate = it[4] if len(it) > 4 else ""
+        rate_html = f" <span class='rate'>{esc(rate)}</span>" if rate else ""
+        cells.append(f"<div title='{esc(tip)}'><div class='l'>{esc(a)} {'ⓘ' if tip else ''}</div>"
+                     f"<div class='v'>{esc(b)}{rate_html}</div><div class='s'>{esc(c)}</div></div>")
+    return f"<div class='mstrip'>{''.join(cells)}</div>"
 
 
 def topic_line(c: dict, n: int = 4) -> str:

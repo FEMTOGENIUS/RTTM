@@ -169,8 +169,9 @@ def evaluate_topics(topic_words: dict[int, list[str]], texts: Sequence[Sequence[
         "coherence_cv_per_topic": dict(zip(sorted(k for k, w in topic_words.items() if w), cv_per)),
         "coherence_npmi": npmi,
         "coherence_umass": umass,
-        "diversity": topic_diversity(words, 25),
-        "diversity_top10": topic_diversity(words, 10),
+        # diversity on single words: "ai chip" and "ai" must count as overlapping
+        "diversity": topic_diversity(unigram_topics(words, 25), 25),
+        "diversity_top10": topic_diversity(unigram_topics(words, 10), 10),
         "n_topics": len(words),
     }
 

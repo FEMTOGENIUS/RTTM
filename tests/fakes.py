@@ -62,7 +62,7 @@ def make_plotly() -> dict[str, types.ModuleType]:
     qual = types.SimpleNamespace(Pastel=["#a"] * 11, Set3=["#b"] * 12, Pastel2=["#c"] * 8, Dark24=["#d"] * 24)
     px.colors = types.SimpleNamespace(qualitative=qual)
     px.Constant = Const
-    for k in ("bar", "pie", "line", "area", "scatter", "imshow", "treemap"):
+    for k in ("bar", "pie", "line", "area", "scatter", "imshow", "treemap", "box"):
         setattr(px, k, _px(k))
     go.Figure = lambda *a, **k: FakeFig("figure")
     go.Scatter = lambda **k: ("scatter", k)

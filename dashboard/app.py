@@ -20,6 +20,7 @@ from data.store import ArticleStore
 from models import engine
 from models.bertopic_model import backend_summary
 from models.lda_model import HAS_GENSIM
+from utils import metric_info as MI
 from utils.logging_setup import get_logger, tail_log
 from utils.preprocess import backend_info
 
@@ -119,8 +120,8 @@ def settings_panel() -> dict:
     """Left control panel (call inside `with st.sidebar:`)."""
     s: dict = {}
     sb = st
-    sb.markdown("<div class='brand'><div class='logo'>NL</div><div><div class='bn'>NewsLens Console</div>"
-                "<div class='bs'>Real-time topic modeling</div></div></div>", unsafe_allow_html=True)
+    sb.markdown("<div class='brand'><div class='logo'>23</div><div><div class='bn'>NEWS23 <small>(MT27)</small></div>"
+                "<div class='bs'>Control panel · real-time topic modeling</div></div></div>", unsafe_allow_html=True)
 
     _section(sb, "Data source")
     s["mode"] = _segmented(sb, "Mode", list(MODE_LABELS), key="mode", format_func=MODE_LABELS.get,
@@ -176,6 +177,7 @@ def settings_panel() -> dict:
         s["dark"] = _toggle("Dark mode", False, "dark")
     with c2:
         s["show_articles"] = _toggle("Show articles", True, "showarts")
+    s["home_charts"] = _toggle("Graphs on front page", True, "homecharts")
 
     sb.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     c1, c2 = sb.columns(2)
@@ -184,7 +186,7 @@ def settings_panel() -> dict:
     s["rerun_models"] = c2.button("Re-run models", **_btn_stretch())
     full = HAS_GENSIM and "installed" in backend_summary()["bertopic"]
     sb.markdown(f"<div class='sb-foot'><span class='dot {'ok' if full else 'lite'}'></span>"
-                f"{'Full NLP stack' if full else 'Lite NLP back-ends'} · NewsLens v3.1</div>", unsafe_allow_html=True)
+                f"{'Full NLP stack' if full else 'Lite NLP back-ends'} · NEWS23 (MT27) v3.3</div>", unsafe_allow_html=True)
     return s
 
 
@@ -263,7 +265,9 @@ def load_articles(s: dict, store: ArticleStore) -> list[dict]:
 
 
 def run_models(rows: list[dict], s: dict) -> engine.PipelineOutput:
-    params = dict(models=tuple(s["models"]), n_topics=s["n_topics"],
+    # both models always run (same articles) so the comparison is always available;
+    # s["models"][0] decides which one drives the front page
+    params = dict(models=("BERTopic", "LDA"), n_topics=s["n_topics"],
                   bertopic_nr_topics="auto" if s["bt_auto"] else s["n_topics"],
                   min_topic_size=int(s["min_topic_size"]) or None, lda_passes=s["lda_passes"],
                   lda_weighting=s["lda_weighting"], embedding_model=s["embedding_model"],
@@ -271,7 +275,7 @@ def run_models(rows: list[dict], s: dict) -> engine.PipelineOutput:
     key = hashlib.sha1((json.dumps(sorted(r["id"] for r in rows)) + json.dumps(params, default=str))
                        .encode()).hexdigest()
     if st.session_state.get("pipeline_key") != key or s["rerun_models"] or "output" not in st.session_state:
-        with st.spinner(f"Running {' + '.join(s['models'])} on {len(rows)} articles…"):
+        with st.spinner(f"Running BERTopic and LDA on {len(rows)} articles…"):
             out = engine.run_pipeline(rows, **params)
         st.session_state["output"] = out
         st.session_state["pipeline_key"] = key
@@ -483,38 +487,98 @@ def tab_maps(out, s, dark):
 def tab_compare(out, s, dark):
     if not out.metrics:
         return
-    rows = []
-    for m, v in out.metrics.items():
-        rows.append({"Model": m, "Backend": out.results[m].backend, "Topics": v["n_topics"],
-                     "Coherence C_V": round(v["coherence_cv"], 3),
-                     "Coherence NPMI": round(v["coherence_npmi"], 3),
-                     "Coherence UMass": round(v["coherence_umass"], 3),
-                     "Diversity (top-25)": f"{100 * v['diversity']:.1f}%",
-                     "Raw outliers": f"{100 * v['outlier_rate_raw']:.1f}%",
-                     "Model runtime (s)": round(v["runtime_s"], 2)})
-    table(pd.DataFrame(rows))
-    hum = feedback_summary()
-    if not hum.empty:
-        st.markdown("**Human interpretability (from the Evaluate tab)**")
-        table(hum)
+    models = [m for m in ("LDA", "BERTopic") if m in out.metrics]
+    st.markdown("Both models are run on **exactly the same articles and preprocessing**, so the numbers below "
+                "are a fair head-to-head comparison. Hover a metric name for its definition.")
+    # ---- scorecard
+    keys = ["coherence_cv", "coherence_npmi", "coherence_umass", "diversity", "n_topics", "outlier_rate_raw",
+            "runtime_s"]
+    wins = {m: 0 for m in models}
+    rows_html = []
+    for k in keys:
+        info = MI.METRICS[k]
+        vals = [out.metrics[m].get(k) for m in models]
+        winner = MI.better_of(k, *vals) if len(models) == 2 else 0
+        cells = []
+        for i, (m, v) in enumerate(zip(models, vals)):
+            is_win = (winner == -1 and i == 0) or (winner == 1 and i == 1)
+            if is_win and k not in ("runtime_s",):
+                wins[m] += 1
+            r = MI.rating(k, v)
+            cells.append(f"<td class='{'win' if is_win else ''}'><b>{MI.fmt(k, v)}</b>"
+                         f"{'<br><span class=rt>' + r + '</span>' if r else ''}</td>")
+        better = {-1: models[0], 1: models[-1]}.get(winner, "–") if len(models) == 2 else "–"
+        rows_html.append(f"<tr><td class='mn' title='{theme.esc(info['means'])}'><b>{theme.esc(info['name'])}</b>"
+                         f"<br><span class='rt'>{theme.esc(info['scale'])} · {theme.esc(info['better'])} is better"
+                         f"</span></td><td class='mm'>{theme.esc(info['means'])}<br><span class='rt'>"
+                         f"{theme.esc(info['read'])}</span></td>{''.join(cells)}<td>{theme.esc(better)}</td></tr>")
+    head = "".join(f"<th>{m}<br><span class='rt'>{theme.esc(out.results[m].backend[:48])}</span></th>" for m in models)
+    st.markdown(f"<table class='score'><thead><tr><th>Metric</th><th>What it means · how to read it</th>{head}"
+                f"<th>Better</th></tr></thead><tbody>{''.join(rows_html)}</tbody></table>", unsafe_allow_html=True)
+    if len(models) == 2:
+        lead = max(wins, key=wins.get)
+        other = [m for m in models if m != lead][0]
+        st.markdown(f"<div class='verdict'><b>Verdict on this news window:</b> {lead} wins {wins[lead]} of the "
+                    f"{sum(wins.values())} quality metrics, {other} wins {wins[other]}. Coherence measures whether "
+                    f"topics make sense; diversity measures whether they are distinct - a good model needs both."
+                    f"</div>", unsafe_allow_html=True)
+    # ---- charts
     c1, c2 = st.columns(2)
     with c1:
         plot(charts.metrics_bar(out.metrics, dark), key="mbar")
     with c2:
-        plot(charts.latency_bar({f"{m} model": out.metrics[m]["runtime_s"] for m in out.metrics}, dark,
-                                "Model runtime (s)"), key="mlat")
+        plot(charts.per_topic_coherence(out.metrics, out.labels, dark), key="mcv")
+    c1, c2 = st.columns(2)
+    with c1:
+        plot(charts.size_compare({m: out.results[m].sizes() for m in models}, dark), key="msize")
+    with c2:
+        plot(charts.latency_bar({f"{m} model": out.metrics[m]["runtime_s"] for m in models}, dark,
+                                "Model runtime (s) - lower is better"), key="mlat")
+    # ---- agreement
     if out.comparison:
         cmp = out.comparison
-        st.markdown(f"**Agreement between models** - Adjusted Rand Index: `{cmp['ari']:.3f}`, "
-                    f"Normalised Mutual Information: `{cmp['nmi']:.3f}` (1 = identical clustering)")
+        st.markdown(theme.section_head("Do the two models agree?"), unsafe_allow_html=True)
+        st.markdown(theme.kpis([
+            ("", "Adjusted Rand Index", f"{cmp['ari']:.3f}", MI.METRICS["ari"]["read"]),
+            ("", "Normalised Mutual Info", f"{cmp['nmi']:.3f}", MI.METRICS["nmi"]["read"]),
+            ("", "Matched topics", f"{sum(1 for b in cmp['best_matches'] if b['jaccard'] >= 0.3)} / "
+                                   f"{len(cmp['best_matches'])}", "LDA topics with a BERTopic twin (Jaccard ≥ 0.3)"),
+            ("", "LDA topics", str(len(cmp["lda_ids"])), "fixed by you"),
+            ("", "BERTopic topics", str(len(cmp["bertopic_ids"])), "chosen by HDBSCAN or you")]),
+            unsafe_allow_html=True)
         ln, bn = out.names("LDA"), out.names("BERTopic")
         plot(charts.jaccard_heatmap(cmp["jaccard"], [ln[t][:45] for t in cmp["lda_ids"]],
                                     [bn[t][:45] for t in cmp["bertopic_ids"]], dark), key="jac")
-    elif len(out.results) < 2:
-        st.info("Select **Compare both** in the sidebar to run LDA and BERTopic side by side.")
-    st.caption("C_V coherence (Röder et al., 2015) is computed on the same tokenised articles "
-               "(gensim CoherenceModel when installed, otherwise an equivalent built-in implementation). "
-               "Diversity = unique words among the top-25 words of all topics (Dieng et al., 2020).")
+        lda, bt = out.results["LDA"], out.results["BERTopic"]
+        match = pd.DataFrame([{"LDA topic": f"T{b['lda_topic']}: " + ", ".join(lda.top_words(b["lda_topic"], 6)),
+                               "Best BERTopic match": f"T{b['bertopic_topic']}: "
+                               + ", ".join(bt.top_words(b["bertopic_topic"], 6)),
+                               "Jaccard": b["jaccard"],
+                               "Same story?": "yes" if b["jaccard"] >= 0.3 else "no"}
+                              for b in cmp["best_matches"]])
+        table(match)
+    # ---- side-by-side topics
+    st.markdown(theme.section_head("Topics side by side", "keywords, size and coherence of every topic"),
+                unsafe_allow_html=True)
+    cols = st.columns(len(models))
+    for col, m in zip(cols, models):
+        with col:
+            res, lab = out.results[m], out.labels[m]
+            per = out.metrics[m].get("coherence_cv_per_topic", {})
+            sizes = res.sizes()
+            table(pd.DataFrame([{"Topic": f"T{t}", "Category": theme.short_cat(lab[t]["category"]),
+                                 "Articles": sizes.get(t, 0),
+                                 "C_V": round(per.get(t, float("nan")), 3),
+                                 "Keywords": ", ".join(res.top_words(t, 8))} for t in res.topic_ids]))
+            st.caption(f"**{m}** · {res.backend}")
+    hum = feedback_summary()
+    if not hum.empty:
+        st.markdown("**Human interpretability (from the Evaluate tab)**")
+        table(hum)
+    with st.expander("Glossary - what every metric means"):
+        for info in MI.METRICS.values():
+            st.markdown(f"**{info['name']}** ({info['scale']}, {info['better']} is better): {info['means']}  \n"
+                        f"<small>{info['read']}</small>", unsafe_allow_html=True)
 
 
 def tab_articles(out, s, dark):
@@ -692,7 +756,7 @@ def auto_refresh(s: dict, store: ArticleStore) -> None:
 
 # --------------------------------------------------------------------------- main
 def main() -> None:
-    st.set_page_config(page_title="NewsLens · real-time news, clustered", page_icon="📰", layout="wide",
+    st.set_page_config(page_title="NEWS23 (MT27) · real-time news topic modeling", page_icon="📰", layout="wide",
                        initial_sidebar_state="expanded")
     t_start = time.perf_counter()
     with st.sidebar:
@@ -743,6 +807,8 @@ def main() -> None:
             news.render_section(out, model, clusters, page, s["country"])
         else:
             news.model_strip(out, model, s)
+            if s.get("home_charts", True):
+                news.dashboard_block(out, model, dark)
             if s["query"]:
                 st.markdown(theme.page_head(f"Results for “{s['query']}”"), unsafe_allow_html=True)
             news.render_home(out, model, clusters, s["country"])

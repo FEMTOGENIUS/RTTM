@@ -1,4 +1,4 @@
-"""NewsLens reader experience: Google-News-style story clusters, newspaper
+"""NEWS23 (MT27) reader experience: Google-News-style story clusters, newspaper
 section pages and "Full coverage" pages - all driven by the topic model."""
 from __future__ import annotations
 
@@ -80,21 +80,75 @@ def _wide() -> dict:
 
 
 def model_strip(out, model: str, s: dict) -> None:
-    """Research panel on the reader pages: which model produced these stories and how good it is."""
+    """Research panel on the reader pages: which model produced these stories, how good it is,
+    and what every number means (hover for definitions, expander for the glossary)."""
+    from utils import metric_info as MI
+
     m = out.metrics.get(model, {})
     res = out.results[model]
-    def f(v, pct=False):
-        return "-" if v is None or v != v else (f"{100 * v:.0f}%" if pct else f"{v:.2f}")
     backend = "full" if "SentenceTransformer" in res.backend or "gensim" in res.backend else "lite"
-    other = [x for x in out.results if x != model]
-    items = [("Topic model", model, f"{backend} back-end" + (f" · vs {other[0]}" if other else "")),
-             ("Topics found", str(len(res.topic_ids)), "story clusters below"),
-             ("Coherence C_V", f(m.get("coherence_cv")), "higher = clearer topics"),
-             ("Topic diversity", f(m.get("diversity"), True), "unique top words"),
-             ("Articles", str(len(out.df)), f"{out.df['source'].nunique()} sources"),
-             ("Pipeline", f"{out.timings.get('total', 0):.1f}s", "preprocess → model → metrics")]
+    other = [x for x in out.metrics if x != model]
+    o = out.metrics.get(other[0], {}) if other else {}
+
+    def vs(key):
+        return f"{other[0]}: {MI.fmt(key, o.get(key))}" if other else MI.METRICS[key]["better"] + " is better"
+
+    items = [("Topic model", model, f"{backend} back-end" + (f" · compared with {other[0]}" if other else ""),
+              "The model that grouped the articles into the stories below. Change it in the left panel."),
+             ("Topics found", str(len(res.topic_ids)), "story clusters below", MI.METRICS["n_topics"]["means"]),
+             ("Coherence C_V", MI.fmt("coherence_cv", m.get("coherence_cv")), vs("coherence_cv"),
+              MI.METRICS["coherence_cv"]["means"] + " " + MI.METRICS["coherence_cv"]["read"],
+              MI.rating("coherence_cv", m.get("coherence_cv"))),
+             ("Topic diversity", MI.fmt("diversity", m.get("diversity")), vs("diversity"),
+              MI.METRICS["diversity"]["means"] + " " + MI.METRICS["diversity"]["read"],
+              MI.rating("diversity", m.get("diversity"))),
+             ("Articles", str(len(out.df)), f"{out.df['source'].nunique()} sources",
+              "Unique English articles left after cleaning and de-duplication."),
+             ("Pipeline", f"{out.timings.get('total', 0):.1f}s", "clean → both models → metrics",
+              "Time to preprocess the articles, fit LDA and BERTopic and compute all metrics.")]
     st.markdown(theme.model_strip(items), unsafe_allow_html=True)
-    st.button("Open topic analytics →", key="fc_open_analytics", on_click=go, args=("Insights",))
+    c1, c2 = st.columns([1, 3])
+    with c1:
+        st.button("Open topic analytics →", key="fc_open_analytics", on_click=go, args=("Insights",))
+    with c2:
+        with st.expander("What do these numbers mean?"):
+            for key in ("coherence_cv", "diversity", "coherence_npmi", "outlier_rate_raw"):
+                info = MI.METRICS[key]
+                st.markdown(f"**{info['name']}** ({info['scale']}, {info['better']} is better) - {info['means']}  \n"
+                            f"<small>{info['read']}</small>", unsafe_allow_html=True)
+
+
+def dashboard_block(out, model: str, dark: bool) -> None:
+    """The analytics graphs on the front page (word frequency, topic distribution,
+    topic evolution, articles per topic, model comparison)."""
+    from utils.trends import topics_over_time
+
+    res = out.results[model]
+    names = out.names(model)
+    sizes = res.sizes()
+    st.markdown(theme.section_head("Topic dashboard", f"{model} · {len(res.topic_ids)} topics · "
+                                   f"{len(out.df)} articles · updates with every refresh"), unsafe_allow_html=True)
+    c1, c2 = st.columns([3, 2], gap="medium")
+    with c1:
+        st.plotly_chart(charts.word_freq_bar(out.word_freq, dark), key="home_wf", **_stretch_kw())
+    with c2:
+        st.plotly_chart(charts.topic_pie(sizes, names, dark), key="home_pie", **_stretch_kw())
+    tot = topics_over_time(out.df, res.assignments, names)
+    c1, c2 = st.columns([3, 2], gap="medium")
+    with c1:
+        if not tot.empty and tot["time"].nunique() > 1:
+            st.plotly_chart(charts.timeline(tot, "count", dark), key="home_tl", **_stretch_kw())
+        else:
+            st.info("The topic timeline appears once articles span more than one time slot.")
+    with c2:
+        st.plotly_chart(charts.topic_size_bar(sizes, names, dark), key="home_sizes", **_stretch_kw())
+    if len(out.metrics) == 2:
+        c1, c2 = st.columns(2, gap="medium")
+        with c1:
+            st.plotly_chart(charts.metrics_bar(out.metrics, dark), key="home_cmp", **_stretch_kw())
+        with c2:
+            st.plotly_chart(charts.latency_bar({f"{m} model": out.metrics[m]["runtime_s"] for m in out.metrics},
+                                               dark, "Model runtime (s)"), key="home_lat", **_stretch_kw())
 
 
 def fc_button(c: dict, where: str) -> None:

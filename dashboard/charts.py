@@ -253,3 +253,28 @@ def topic_race(tot: pd.DataFrame, dark: bool = False) -> go.Figure:
     fig.update_layout(showlegend=False, yaxis_title=None, xaxis_title="articles so far")
     return _layout(fig, dark, "Topic race - press ▶ to replay how the news unfolded",
                    height=max(380, 30 * len(names) + 160))
+
+
+def per_topic_coherence(metrics: dict, labels: dict, dark: bool = False) -> go.Figure:
+    rows = []
+    for m, v in metrics.items():
+        for t, cv in (v.get("coherence_cv_per_topic") or {}).items():
+            cat = labels.get(m, {}).get(t, {}).get("category", "")
+            rows.append({"model": m, "C_V": cv, "topic": f"T{t} {cat}"})
+    d = pd.DataFrame(rows, columns=["model", "C_V", "topic"])
+    fig = px.box(d, x="model", y="C_V", color="model", points="all", hover_name="topic",
+                 color_discrete_map={"LDA": "#64748B", "BERTopic": "#C8102E"})
+    fig.update_layout(showlegend=False, xaxis_title=None, yaxis_title="C_V per topic")
+    return _layout(fig, dark, "Coherence of every topic (each dot = one topic)")
+
+
+def size_compare(sizes: dict[str, dict[int, int]], dark: bool = False) -> go.Figure:
+    rows = []
+    for m, sz in sizes.items():
+        vals = sorted((v for k, v in sz.items() if k != -1), reverse=True)
+        rows += [{"model": m, "rank": i + 1, "articles": v} for i, v in enumerate(vals)]
+    d = pd.DataFrame(rows, columns=["model", "rank", "articles"])
+    fig = px.bar(d, x="rank", y="articles", color="model", barmode="group",
+                 color_discrete_map={"LDA": "#64748B", "BERTopic": "#C8102E"})
+    fig.update_layout(xaxis_title="topic rank (largest → smallest)", yaxis_title="articles")
+    return _layout(fig, dark, "How articles spread over topics")

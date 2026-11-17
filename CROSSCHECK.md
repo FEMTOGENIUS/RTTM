@@ -110,7 +110,7 @@ it would contradict the paper.)
    | ARI vs Google stories | **0.855** | 0.363 |
    | NMI vs Google stories | **0.953** | 0.700 |
    | Coherence C_V | **0.622** | 0.503 |
-   | Topic diversity (top-25) | **99 %** | 37 % |
+   | Topic diversity (top-25, single words) | **97 %** | 37 % |
 
    This supports the paper's qualitative claim (BERTopic is better on short news text). It is a
    small sanity check, not a paper result. The full MiniLM back-end could not run in the build sandbox.

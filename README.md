@@ -1,4 +1,4 @@
-# 📰 NewsLens — Real-Time Topic Modeling for News Articles
+# 📰 NEWS23 (MT27) — Real-Time Topic Modeling for News Articles
 
 A working implementation of the system described in *“Real-Time Topic Modeling for Streaming News Articles”*
 (paper, project report and presentation): live news ingestion → NLP preprocessing → **LDA** and **BERTopic**
@@ -55,13 +55,13 @@ in the dashboard (**System** tab) - it never crashes because of a missing packag
 
 ## 2. Using the app
 
-NewsLens looks and works like a news website; the topic model runs underneath it.
+NEWS23 (MT27) looks and works like a news website; the topic model runs underneath it.
 
 | Part | What it does |
 |---|---|
 | **Left control panel** | data mode (Live / Sample / Upload), search, sources, language, region, time window, streaming, model (BERTopic / LDA / Compare), number of topics, advanced options, dark mode, Fetch / Re-run |
 | **Masthead + section menu** | Home · Politics · World · Business · Tech · Sport · Health · Entertainment · **More ▾** (Climate, Law & Justice, Science & Space, Startups, Energy, Other) · **Topic Analytics** |
-| **Topic-model panel** | on every front page: model used, topics found, coherence C_V, diversity, articles, pipeline time, link to Topic Analytics |
+| **Topic-model panel + Topic dashboard** | on the front page: model used, topics found, coherence C_V, diversity, articles, pipeline time, then the graphs: word frequency, topic distribution pie, topic evolution timeline, articles per topic, and (Compare mode) LDA vs BERTopic quality + runtime. Toggle "Graphs on front page" in the panel |
 | **Trending ticker** | scrolling list of breaking / trending stories detected by the trend analysis (hover to pause) |
 | **Home** | lead story with picture and related coverage, *Top stories* grid, *Most covered* and *Latest* rails, hot keywords, newspaper-style section blocks |
 | **Story clusters** | every topic found by BERTopic/LDA becomes a story: lead article + coverage from other publishers + its **topic number and keywords** + "Full coverage" link |

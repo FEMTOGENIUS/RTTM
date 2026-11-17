@@ -38,14 +38,15 @@ def test_home_page_newspaper_layout(monkeypatch):
     st, _ = run_app(monkeypatch, BASE)
     assert st.errors == [], st.errors
     txt = st.texts()
-    for part in ("News<span>Lens</span>", "TRENDING", "Top stories", "Most covered", "Latest", "class='lead'"):
+    for part in ("NEWS<span>23</span>", "TRENDING", "Top stories", "Most covered", "Latest", "class='lead'"):
         assert part in txt, part
     assert "Breaking" in txt                       # cyclone burst shown as a Breaking story
     assert "Full coverage" in txt
     assert "of 13 sources" not in txt and "Sample edition" in txt
-    for part in ("NewsLens Console", "Topic model", "Coherence C_V", "Topics found", "<b>Topic 0</b>",
-                 "Open topic analytics"):
+    for part in ("(MT27)", "Topic model", "Coherence C_V", "Topics found", "<b>Topic 0</b>",
+                 "Open topic analytics", "Topic dashboard"):
         assert part in txt, part
+    assert st.count("plotly_chart") >= 4            # graphs on the front page
 
 
 @pytest.mark.parametrize("page", ["Politics", "World", "Business", "Tech", "Sport", "Health", "Entertainment",
@@ -68,6 +69,13 @@ def test_missing_story_page(monkeypatch):
     assert st.errors == [] and "no longer in the current news window" in st.texts()
 
 
+def test_front_page_graphs_compare_and_off(monkeypatch):
+    st, _ = run_app(monkeypatch, {**BASE, "model": "Compare both"})
+    assert st.errors == [] and st.count("plotly_chart") >= 6
+    st, _ = run_app(monkeypatch, {**BASE, "homecharts": False})
+    assert st.errors == [] and st.count("plotly_chart") == 0
+
+
 def test_search_results(monkeypatch):
     st, _ = run_app(monkeypatch, {**BASE, "query": "cyclone"})
     assert st.errors == [] and "Results for" in st.texts()
@@ -85,8 +93,9 @@ def test_insights_all_models(monkeypatch, model):
     assert "Pipeline time" in txt
     if model != "LDA":
         assert "Trend alerts" in txt
-    if model == "Compare both":
-        assert "Adjusted Rand Index" in txt
+    # comparison is always available now (both models always run)
+    for part in ("Adjusted Rand Index", "class='score'", "Verdict", "What it means", "Topics side by side"):
+        assert part in txt, part
 
 
 def test_dark_mode_search_and_options(monkeypatch):
