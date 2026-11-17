@@ -116,13 +116,17 @@ def _section(container, title: str) -> None:
 
 
 def settings_panel() -> dict:
-    """All controls, shown inside the Settings pop-over in the top bar."""
+    """Left control panel (call inside `with st.sidebar:`)."""
     s: dict = {}
     sb = st
+    sb.markdown("<div class='brand'><div class='logo'>NL</div><div><div class='bn'>NewsLens Console</div>"
+                "<div class='bs'>Real-time topic modeling</div></div></div>", unsafe_allow_html=True)
 
     _section(sb, "Data source")
     s["mode"] = _segmented(sb, "Mode", list(MODE_LABELS), key="mode", format_func=MODE_LABELS.get,
                            help="Live fetches news continuously. Sample and Upload work offline.")
+    s["query"] = sb.text_input("Search query", value="", key="query", placeholder="e.g. india, election, AI",
+                               help="Keywords sent to the news sources. Leave empty for top headlines.").strip()
     if s["mode"].startswith("Live"):
         s["sources"] = sb.multiselect("Sources", list(SOURCE_OPTIONS), default=["google_news", "rss"],
                                       format_func=SOURCE_SHORT.get, key="sources",
@@ -147,6 +151,8 @@ def settings_panel() -> dict:
         if s["mode"].endswith("upload file)"):
             s["upload"] = sb.file_uploader("CSV or JSON file", type=["csv", "json"], key="upload",
                                            help="Columns: title, description/content, date, source, url")
+    s["window"] = WINDOWS[sb.selectbox("Time window", list(WINDOWS),
+                                       index=3 if s["mode"].startswith("Live") else 5, key="window")]
 
     _section(sb, "Topic model")
     model_choice = _segmented(sb, "Model", ["BERTopic", "LDA", "Compare both"], key="model",
@@ -171,12 +177,14 @@ def settings_panel() -> dict:
     with c2:
         s["show_articles"] = _toggle("Show articles", True, "showarts")
 
+    sb.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
     c1, c2 = sb.columns(2)
-    s["fetch_now_btn"] = c1.button("Fetch now", disabled=not s["mode"].startswith("Live"), type="primary",
-                                   **_btn_stretch())
+    s["fetch_now"] = c1.button("Fetch now", disabled=not s["mode"].startswith("Live"), type="primary",
+                               **_btn_stretch())
     s["rerun_models"] = c2.button("Re-run models", **_btn_stretch())
     full = HAS_GENSIM and "installed" in backend_summary()["bertopic"]
-    sb.caption(f"{'Full NLP stack' if full else 'Lite NLP back-ends'} · NewsLens v3")
+    sb.markdown(f"<div class='sb-foot'><span class='dot {'ok' if full else 'lite'}'></span>"
+                f"{'Full NLP stack' if full else 'Lite NLP back-ends'} · NewsLens v3.1</div>", unsafe_allow_html=True)
     return s
 
 
@@ -276,7 +284,7 @@ def insights_header(out: engine.PipelineOutput, s: dict, n_rows: int) -> None:
     lf = st.session_state.get("last_fetch")
     main_model = s["models"][0] if s["models"][0] in out.results else next(iter(out.results), "-")
     n_topics = len(out.results[main_model].topic_ids) if main_model in out.results else 0
-    st.markdown(theme.page_head("Insights", "#121212"), unsafe_allow_html=True)
+    st.markdown(theme.page_head("Topic Analytics", "#121212"), unsafe_allow_html=True)
     st.caption("How the topic models see the news: quality metrics, trends, maps, model comparison, export "
                "and human evaluation.")
     cov = out.metrics.get(main_model, {}).get("coherence_cv")
@@ -306,7 +314,7 @@ def source_status(s: dict) -> str:
     msg = f"<span class='dot' style='background:#16A34A'></span>{ok} of {total} sources live"
     if bad:
         msg += (f" · <span class='dot' style='background:#D97706'></span>{bad} temporarily unavailable "
-                "(rate-limited or blocked by the publisher; see Insights → System)")
+                "(rate-limited or blocked by the publisher; see Topic Analytics → System)")
     return msg
 
 
@@ -685,26 +693,11 @@ def auto_refresh(s: dict, store: ArticleStore) -> None:
 # --------------------------------------------------------------------------- main
 def main() -> None:
     st.set_page_config(page_title="NewsLens · real-time news, clustered", page_icon="📰", layout="wide",
-                       initial_sidebar_state="collapsed")
+                       initial_sidebar_state="expanded")
     t_start = time.perf_counter()
-    # ---- top bar: edition line | search | time window | settings | refresh
-    top = st.columns([3.0, 1.6, 1.1, 0.9, 0.9], vertical_alignment="center")
-    util_ph = top[0].empty()
-    with top[3]:            # settings first: the default time window depends on the mode
-        with news._popover("Settings"):
-            s = settings_panel()
-    with top[1]:
-        query = st.text_input("Search", value="", key="query", placeholder="Search news, e.g. election",
-                              label_visibility="collapsed").strip()
-    with top[2]:
-        win_label = st.selectbox("Time window", list(WINDOWS), index=3 if s["mode"].startswith("Live") else 5,
-                                 key="window", label_visibility="collapsed")
-    with top[4]:
-        refresh = st.button("Refresh", type="primary", key="refresh_btn", **_btn_stretch())
-    s["query"], s["window"] = query, WINDOWS[win_label]
+    with st.sidebar:
+        s = settings_panel()
     live = s["mode"].startswith("Live")
-    s["fetch_now"] = bool(s.get("fetch_now_btn")) or (refresh and live)
-    s["rerun_models"] = bool(s.get("rerun_models")) or (refresh and not live)
     apply_theme(s["dark"])
     store = ArticleStore()
     try:
@@ -717,7 +710,7 @@ def main() -> None:
     lf = st.session_state.get("last_fetch")
     updated = lf["time"].astimezone(theme.ZoneInfo(theme.REGION_TZ.get(s["country"], "UTC"))).strftime("%H:%M") \
         if (lf and live) else "now"
-    util_ph.markdown(theme.utility_bar(s["country"], live, updated), unsafe_allow_html=True)
+    st.markdown(theme.utility_bar(s["country"], live, updated), unsafe_allow_html=True)
     st.markdown(theme.masthead(), unsafe_allow_html=True)
     news.render_nav()
     if not rows:
@@ -746,10 +739,12 @@ def main() -> None:
         elif page.startswith("topic:"):
             news.render_topic(out, model, clusters, int(page.split(":", 1)[1]), s["country"], dark)
         elif page in news.SECTIONS:
+            news.model_strip(out, model, s)
             news.render_section(out, model, clusters, page, s["country"])
         else:
-            if query:
-                st.markdown(theme.page_head(f"Results for “{query}”"), unsafe_allow_html=True)
+            news.model_strip(out, model, s)
+            if s["query"]:
+                st.markdown(theme.page_head(f"Results for “{s['query']}”"), unsafe_allow_html=True)
             news.render_home(out, model, clusters, s["country"])
     except Exception as exc:
         log.exception("page %s failed", page)

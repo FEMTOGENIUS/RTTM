@@ -53,7 +53,8 @@ def render_nav() -> None:
         fn = getattr(st, "segmented_control", None)
         if callable(fn):
             with st.container(key="nav_main_wrap"):
-                fn("Sections", NAV_MAIN, key="nav_main", on_change=_nav_changed, label_visibility="collapsed", **kw)
+                fn("Sections", NAV_MAIN, key="nav_main", on_change=_nav_changed, label_visibility="collapsed",
+                   format_func=lambda x: "Topic Analytics" if x == "Insights" else x, **kw)
         else:  # very old Streamlit
             choice = st.radio("Sections", NAV_MAIN, horizontal=True, label_visibility="collapsed")
             st.session_state["page"] = choice
@@ -76,6 +77,24 @@ def _popover(label: str):
 
 def _wide() -> dict:
     return _stretch_kw()
+
+
+def model_strip(out, model: str, s: dict) -> None:
+    """Research panel on the reader pages: which model produced these stories and how good it is."""
+    m = out.metrics.get(model, {})
+    res = out.results[model]
+    def f(v, pct=False):
+        return "-" if v is None or v != v else (f"{100 * v:.0f}%" if pct else f"{v:.2f}")
+    backend = "full" if "SentenceTransformer" in res.backend or "gensim" in res.backend else "lite"
+    other = [x for x in out.results if x != model]
+    items = [("Topic model", model, f"{backend} back-end" + (f" · vs {other[0]}" if other else "")),
+             ("Topics found", str(len(res.topic_ids)), "story clusters below"),
+             ("Coherence C_V", f(m.get("coherence_cv")), "higher = clearer topics"),
+             ("Topic diversity", f(m.get("diversity"), True), "unique top words"),
+             ("Articles", str(len(out.df)), f"{out.df['source'].nunique()} sources"),
+             ("Pipeline", f"{out.timings.get('total', 0):.1f}s", "preprocess → model → metrics")]
+    st.markdown(theme.model_strip(items), unsafe_allow_html=True)
+    st.button("Open topic analytics →", key="fc_open_analytics", on_click=go, args=("Insights",))
 
 
 def fc_button(c: dict, where: str) -> None:

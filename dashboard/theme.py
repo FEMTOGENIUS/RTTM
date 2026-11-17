@@ -60,7 +60,44 @@ html, body, .stApp, .stMarkdown, button, input, textarea, select, [class*="css"]
   font-family:'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif !important; }
 .stApp { background:var(--nl-bg); color:var(--nl-text); }
 [data-testid="stHeader"] { background:transparent; height:0; }
-[data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] { display:none; }
+/* left control panel */
+[data-testid="stSidebar"] > div:first-child { background:var(--nl-panel); border-right:1px solid var(--nl-border); }
+[data-testid="stSidebarUserContent"] { padding-top:1rem; }
+.brand { display:flex; gap:12px; align-items:center; padding:2px 2px 14px 2px; border-bottom:3px double var(--nl-text);
+  margin-bottom:4px; }
+.brand .logo { width:40px; height:40px; display:flex; align-items:center; justify-content:center; color:#fff !important;
+  font-family:'Playfair Display', Georgia, serif; font-weight:900; font-size:1.05rem; background:var(--nl-red); border-radius:4px; }
+.brand .bn { font-family:'Playfair Display', Georgia, serif; font-weight:800; font-size:1.1rem; color:var(--nl-text) !important; line-height:1.2; }
+.brand .bs { font-size:.74rem; color:var(--nl-muted) !important; letter-spacing:.04em; }
+.sb-sec { font-size:.68rem; font-weight:800; letter-spacing:.14em; text-transform:uppercase; color:var(--nl-red) !important;
+  margin:18px 0 4px 0; display:flex; align-items:center; gap:8px; }
+.sb-sec:after { content:""; flex:1; height:1px; background:var(--nl-border); }
+[data-testid="stSidebar"] label p, [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
+  font-size:.8rem !important; font-weight:600 !important; color:var(--nl-muted) !important; }
+[data-testid="stSidebar"] [data-baseweb="select"] > div, [data-testid="stSidebar"] input { border-radius:4px !important; }
+[data-testid="stSidebar"] [data-testid="stExpander"] { border:1px solid var(--nl-border); border-radius:4px; }
+[data-testid="stSidebar"] [data-baseweb="tag"] { background:rgba(200,16,46,.10) !important; border-radius:3px; }
+[data-testid="stSidebar"] [data-baseweb="tag"] span { color:var(--nl-red) !important; font-weight:600; }
+[data-testid="stSidebar"] button[kind="segmented_controlActive"], [data-testid="stSidebar"] button[aria-checked="true"] {
+  background:var(--nl-text) !important; color:var(--nl-bg) !important; border-color:var(--nl-text) !important; }
+[data-testid="stSidebar"] button[kind="segmented_controlActive"] p { color:var(--nl-bg) !important; }
+.sb-foot { margin-top:14px; padding-top:10px; border-top:1px solid var(--nl-border); font-size:.74rem;
+  color:var(--nl-muted) !important; display:flex; align-items:center; gap:6px; }
+.sb-foot .dot.ok { background:#16A34A; } .sb-foot .dot.lite { background:#D97706; }
+
+/* research panel on reader pages */
+.mstrip { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); border:1px solid var(--nl-border);
+  border-left:4px solid var(--nl-red); background:var(--nl-soft); margin:2px 0 4px 0; }
+@media (max-width:1100px) { .mstrip { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+.mstrip > div { padding:9px 14px; border-right:1px solid var(--nl-border); }
+.mstrip > div:last-child { border-right:0; }
+.mstrip .l { font-size:.66rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; color:var(--nl-muted) !important; }
+.mstrip .v { font-family:'Source Serif 4', Georgia, serif; font-size:1.25rem; font-weight:700; color:var(--nl-text) !important; }
+.mstrip .s { font-size:.7rem; color:var(--nl-muted) !important; }
+.tline { font-size:.72rem; color:var(--nl-muted) !important; margin:2px 0 4px 0; }
+.tline b { color:var(--nl-text) !important; font-weight:700; }
+.tline .kw { display:inline-block; padding:0 6px; margin-right:4px; border-radius:3px; background:var(--nl-soft);
+  border:1px solid var(--nl-border); color:var(--nl-text) !important; }
 .block-container { padding-top:.6rem !important; max-width:1280px; }
 .stApp h1,.stApp h2,.stApp h3,.stApp h4,.stApp p,.stApp label,.stApp li,.stApp span { color:var(--nl-text); }
 a { color:inherit; }
@@ -329,6 +366,18 @@ def footer(status_html: str) -> str:
             f"the original publishers</span></div>")
 
 
+# --------------------------------------------------------------------------- research panel
+def model_strip(items: list[tuple[str, str, str]]) -> str:
+    cells = "".join(f"<div><div class='l'>{esc(a)}</div><div class='v'>{esc(b)}</div><div class='s'>{esc(c)}</div></div>"
+                    for a, b, c in items)
+    return f"<div class='mstrip'>{cells}</div>"
+
+
+def topic_line(c: dict, n: int = 4) -> str:
+    kws = "".join(f"<span class='kw'>{esc(w)}</span>" for w in c.get("keywords", [])[:n])
+    return f"<div class='tline'><b>Topic {c['tid']}</b> · {kws}</div>"
+
+
 # --------------------------------------------------------------------------- stories
 def related_list(rows: list[dict]) -> str:
     if not rows:
@@ -345,7 +394,8 @@ def lead_story(c: dict) -> str:
     summary = f"<p class='summary'>{esc(_trim(lead.get('description', ''), 260))}</p>" if lead.get("description") else ""
     return (f"<div class='lead'>{image_or_placeholder(lead.get('image', ''), c['category'])}"
             f"<div style='margin-top:10px'>{kicker(c['category'], c['status'])}"
-            f"{link(lead['title'], lead.get('url', ''))}{summary}{meta}{related_list(c['related'][:3])}</div></div>")
+            f"{link(lead['title'], lead.get('url', ''))}{summary}{meta}{topic_line(c, 6)}"
+            f"{related_list(c['related'][:3])}</div></div>")
 
 
 def story_card(c: dict, n_related: int = 2) -> str:
@@ -354,7 +404,7 @@ def story_card(c: dict, n_related: int = 2) -> str:
     meta = (f"<div class='meta'><b>{esc(lead['source'])}</b> · {ago(lead['published_at'])} · "
             f"{c['size']} articles</div>")
     return (f"<div class='story'><div class='row'><div style='flex:1'>{kicker(c['category'], c['status'])}"
-            f"{link(lead['title'], lead.get('url', ''))}{meta}</div>{img}</div>"
+            f"{link(lead['title'], lead.get('url', ''))}{meta}{topic_line(c)}</div>{img}</div>"
             f"{related_list(c['related'][:n_related])}</div>")
 
 

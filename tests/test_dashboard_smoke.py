@@ -43,6 +43,9 @@ def test_home_page_newspaper_layout(monkeypatch):
     assert "Breaking" in txt                       # cyclone burst shown as a Breaking story
     assert "Full coverage" in txt
     assert "of 13 sources" not in txt and "Sample edition" in txt
+    for part in ("NewsLens Console", "Topic model", "Coherence C_V", "Topics found", "<b>Topic 0</b>",
+                 "Open topic analytics"):
+        assert part in txt, part
 
 
 @pytest.mark.parametrize("page", ["Politics", "World", "Business", "Tech", "Sport", "Health", "Entertainment",

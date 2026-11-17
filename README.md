@@ -59,18 +59,16 @@ NewsLens looks and works like a news website; the topic model runs underneath it
 
 | Part | What it does |
 |---|---|
-| **Top bar** | date, edition and LIVE indicator · search box · time window · **Settings** · **Refresh** |
-| **Masthead + section menu** | Home · Politics · World · Business · Tech · Sport · Health · Entertainment · **More ▾** (Climate, Law & Justice, Science & Space, Startups, Energy, Other) · **Insights** |
+| **Left control panel** | data mode (Live / Sample / Upload), search, sources, language, region, time window, streaming, model (BERTopic / LDA / Compare), number of topics, advanced options, dark mode, Fetch / Re-run |
+| **Masthead + section menu** | Home · Politics · World · Business · Tech · Sport · Health · Entertainment · **More ▾** (Climate, Law & Justice, Science & Space, Startups, Energy, Other) · **Topic Analytics** |
+| **Topic-model panel** | on every front page: model used, topics found, coherence C_V, diversity, articles, pipeline time, link to Topic Analytics |
 | **Trending ticker** | scrolling list of breaking / trending stories detected by the trend analysis (hover to pause) |
 | **Home** | lead story with picture and related coverage, *Top stories* grid, *Most covered* and *Latest* rails, hot keywords, newspaper-style section blocks |
-| **Story clusters** | every topic found by BERTopic/LDA becomes a story: lead article + coverage from other publishers + "Full coverage" link |
+| **Story clusters** | every topic found by BERTopic/LDA becomes a story: lead article + coverage from other publishers + its **topic number and keywords** + "Full coverage" link |
 | **Full coverage page** | all articles of one story, timeline, who is covering it, related stories |
-| **Insights** | the analytics for the paper: the tabs below |
+| **Topic Analytics** | the analytics for the paper: the tabs below |
 
-Settings (gear pop-over): data mode (Live / Sample / Upload), sources, language, region, articles per source,
-streaming + interval, API keys, model (BERTopic / LDA / Compare), number of topics, advanced options, dark mode.
-
-### Insights tabs (analytics)
+### Topic Analytics tabs
 
 <details><summary>All settings</summary>
 
